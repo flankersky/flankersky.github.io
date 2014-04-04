@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>在NDIS6.x的filter基础上的转发 - flanker's sky</title>
+    <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/bootstrap.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/niu2.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/custom.css" type="text/css" />
+<link rel="stylesheet" href="http://flankersky.com/theme/css/pygments/github.css" type="text/css" />    
+    <script type="text/javascript">
+        window.onload = function() {
+        };
+    </script>
+    <!-- HTML5 shim and Respond.js IE8 support of HTML5 elements and media queries -->
+    <!--[if lt IE 9]>
+        <script src="http://flankersky.com/theme/js/html5shiv.js"></script>
+        <script src="http://flankersky.com/theme/js/respond.min.js"></script>
+    <![endif]-->
+    <!--[if IE 7]>
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome-ie7.min.css" type="text/css" />
+    <![endif]--></head>
+  <body> 
+    <div id="body-header"><div class="navbar navbar-inverse navbar-fixed-top">
+<div class="col-md-12">
+    <div class="navbar-header">
+        <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+        </button>
+        <a class="navbar-brand" href="http://flankersky.com">
+            <i class="fa fa-home"></i>flanker's sky
+        </a>
+    </div>
+	<nav class="collapse navbar-collapse bs-navbar-collapse" role="navigation">
+		<ul class="nav navbar-nav"><li><a href="/about.html" title="about me">
+			    <i class="fa fa-anchor"></i>关于</a>
+			</li><!-- category dropdown list -->
+		<li class="dropdown">
+           <a href="#" class="dropdown-toggle" data-toggle="dropdown">
+                <i class="fa fa-folder-open"></i>分类<b class="caret"></b>
+           </a>
+           <ul class="dropdown-menu"><li><a href="http://flankersky.com/linux/index.html"><i class="fa fa-folder-close"></i>linux                      (4)</a></li><li><a href="http://flankersky.com/nginx/index.html"><i class="fa fa-folder-close"></i>nginx                      (3)</a></li><li><a href="http://flankersky.com/windows/index.html"><i class="fa fa-folder-close"></i>windows                      (4)</a></li></ul>
+        </li>
+        <!--  self defined dropdown list --></ul>
+        
+        <!-- right nav bar -->
+		<ul class="nav navbar-nav navbar-right">
+		<!-- google custom search --></ul>
+	</nav>
+</div>
+</div></div>
+    
+    <div id="body-content"><div class="col-md-8 col-md-offset-2"><h1 id="content-heading">在NDIS6.x的filter基础上的转发</h1></div>
+<div id="niu2-left-container" class="col-md-6 col-md-offset-2">
+    <div id="niu2-main-content">
+        <p>&emsp;&emsp;最近搞windows驱动，想把以前的一个业务搬到windows平台上，走了不少的弯路。这可能是固有思维的缘故吧，因为这个功能在linux上市已经做完了的，但是改动了linux的内核源码（协议栈的路由部分），所以就想都没有想，以为也要移植一个协议栈到windows，于是乎废了很长时间，尝试移植ReactOS的协议栈到windows xp下，后来移植上去之后发现，ROS毕竟是精简过的，很多IRP操作没有定义，所以要想此协议栈正常工作，要么增加这个IRP对应的代码，要么连上层的AFD.sys winsock.dll都移植过来，不过这两种方案工作量都太大了，对我这个菜鸟来说太难了。所以，只能寻找其他出路，还好，是找到了。感慨一下，下面说正题。代码链接在最下面. </p>
+<p>&emsp;&emsp;这里只想说一下在NDIS6.x之后的中间层驱动，可能不能叫它中间层驱动了，因为相比NDIS5.1，MS又进行了进一步的封装，原先的那种复杂的堆叠方式已经不明显了，不过，倒是更灵活了，比如你可以单独的只过滤接收或者发送的数据包。如果我是先学的NDIS6.x的filter，后学的NDIS5.1的passthru的话，我肯定会觉得passthru是坨翔，简单一个字“乱”。
+闲话不扯了，这里就是想贴一下在filter的基础上做转发的代码，按照惯例，先推荐几篇自己看的blog，收益颇多，在此表示感谢。
+<a href="http://bbs.pediy.com/showthread.php?t=183801">http://bbs.pediy.com/showthread.php?t=183801</a></p>
+<p><a href="http://yexin218.iteye.com/blog/645257#bc2339067">http://yexin218.iteye.com/blog/645257#bc2339067</a></p>
+<p><a href="http://www.codecho.com/tag/filter-driver/page/2/">http://www.codecho.com/tag/filter-driver/page/2/</a> </p>
+<p>尤其是第二篇blog，里面有部分代码，本人也借鉴了不少，在此跪谢。但是，我又不得不指出其中一个bug，会引起BSOD。详情见下面第2点。 </p>
+<p><strong>关于代码只说两点，一个知识点，一个上面第二篇blog中隐含的bug。 </strong></p>
+<h3 id="63e1507c0cbeb184c08ad00f4d7cae70">1 关于NBL NB MDL的关系</h3>
+<h4 id="0cc175b9c0f1b6a831c399e269772661">a</h4>
+<p>&emsp;&emsp;在NDIS5.1中的数据包的基本单位是NDIS_PACKET。但是在NDIS6.1中变成了NET_BUFFER。
+NBL是由NB组成的链表，理论上NBL中会有多个NB，但是看WDK的如下文档：</p>
+<p>&emsp;&emsp;In the receive path, miniport drivers can use a list of NET_BUFFER_LIST structures to indicate receives.
+Each NET_BUFFER_LIST indicated by a miniport driver contains one NET_BUFFER structure.
+&emsp;&emsp;However, Native 802.11 drivers can have more than one NET_BUFFER structure.
+Because a different protocol binding can process each NET_BUFFER_LIST structure, NDIS can return each NET_BUFFER_LIST structure to the miniport driver independently.</p>
+<p>就是说，一般情况下，一个NBL只有一个NB，除非在Native 802.11 的情况下，本人的中图省事，就只考虑了一种情况。对于NBL的多个NB也是有要求的，见下面WDK的文档： </p>
+<p>&emsp;&emsp;If a driver originates a send request, the driver should allocate a NET_BUFFER_LIST structure for the Ethernet frames. The NetBufferListInfo member in each NET_BUFFER_LIST structure must include the out-of-band (OOB) data that is required for the particular use. The OOB data applies to all of the NET_BUFFER structures that are associated with a NET_BUFFER_LIST structure.
+If a driver originates a send request, the driver should allocate one or more NET_BUFFER structures for the Ethernet frames and link these structures to the NET_BUFFER_LIST structure. Each NET_BUFFER structure that is linked to a NET_BUFFER_LIST structure describes a single Ethernet frame.
+All NET_BUFFER structures that are associated with a NET_BUFFER_LIST structure must have the same Ethernet frame type and IP protocol version (IPv4 or IPv6).
+All NET_BUFFER structures that are associated with a NET_BUFFER_LIST structure must have the same source and destination MAC addresses.
+If a driver is sending TCP or UDP frames, all of the NET_BUFFER structures that are associated with a NET_BUFFER_LIST structure must be associated with same TCP or UDP connection. </p>
+<h4 id="92eb5ffee6ae2fec3ad71c777531578f">b</h4>
+<p>&emsp;&emsp;一个NB会包含多个MDL，MDL是把逻辑上不连续的内存给连续了起来，比如一个数据包的内容的前半部分在第一个MDL的尾部，后半部分在下一个MDL的头部。具体的MDL的读取看：
+http://yexin218.iteye.com/blog/532184
+很重要的一点就是，MDL的长度不等于数据的长度，真正的数据的长度是保存在NB中的。
+c. 在接收路径上FilterReceiveNetBufferLists上可以看到，底层的miniport是可以一次indicate多个NBL的，多个NBL串成一个单向链表，所以接收路径上要遍历到每一个NBL。
+所以，在接收路径上最麻烦的就是对这个NBL链表的处理，包含多个循环。具体可以参考代码。 </p>
+<h3 id="05c182ff2d1c37b5349352fe6c85a8f9">2 关于FilterSendNetBufferListsComplete中的bug</h3>
+<p>&emsp;&emsp;上面说到，在接收路径上回一次接收到多个NBL，同理，在
+FilterSendNetBufferListsComplete函数中，下层的miniport同样可以一次通知多个NBL的发送完成，但是，在函数的参数中没有这个NBL链表的长度，这也就是我上面提到的那个bug，这个bug也纠结了很久，因为是偶发性的，不是每一次都会一次性通知多个NBL的发送完成。解决方法就是自己遍历每一个NBL，判断是中间层发送的还是上层发下来的。 </p>
+<h4 id="aa03d3ebe83d0fb381ff7e5b58de2d70">关于代码：</h4>
+<p>&emsp;&emsp;代码是在wdk filter基础上改的，win7 32位测试成功，参考了网上的代码，代码中的一些业务相关的代码被我去掉了，但是在去掉之后，也没有做进一步的测试，所以不保证代码的完整性。但问题应该也不大。 </p>
+<p>链接：<a href="http://pan.baidu.com/s/1jGC4zdG">http://pan.baidu.com/s/1jGC4zdG</a> 密码：dee2</p>
+    </div><div id="content-comments"><!-- Duoshuo Comment BEGIN -->
+<div class="ds-thread"></div>
+<script type="text/javascript">
+    var duoshuoQuery = {short_name:"atime-me"};
+(function() {
+ var ds = document.createElement('script');
+ ds.type = 'text/javascript';ds.async = true;
+ ds.src = 'http://static.duoshuo.com/embed.js';
+ ds.charset = 'UTF-8';
+ (document.getElementsByTagName('head')[0] 
+  || document.getElementsByTagName('body')[0]).appendChild(ds);
+ })();
+</script>
+<!-- Duoshuo Comment END --></div>
+</div>
+<div id="niu2-right-container" class="col-md-3">
+<div id="niu2-sidebar-meta" class="niu2-sidebar">
+    <div class="niu2-sidebar-label"><i class="fa fa-calendar"></i>发布时间:</div>
+    <div class="niu2-sidebar-value">2014-04-01 11:06:36</div>
+<div class="niu2-sidebar-label"><i class="fa fa-open-folder"></i>分类:</div>
+    <div class="niu2-sidebar-value"><a href="http://flankersky.com/windows/index.html">windows</a></div><div class="niu2-sidebar-label"><i class="fa fa-tag"></i>标签:</div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/win7.html">win7</a></div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/filter.html">filter</a></div></div>
+
+<div id="niu2-sidebar-toc" class="niu2-sidebar" data-status="closed"><div class="niu2-sidebar-label">
+        <i id="niu2-sidebar-toc-ctrl" class="fa fa-plus"></i>目录
+    </div>
+    <ol id="niu2-sidebar-toc-list">
+        <li><a href="#content-heading">在NDIS6.x的filter基础上的转发</a></li>
+        <li><a href='#63e1507c0cbeb184c08ad00f4d7cae70'>1 关于NBL NB MDL的关系</a><ol><li><a href='#0cc175b9c0f1b6a831c399e269772661'>a</a></li><li><a href='#92eb5ffee6ae2fec3ad71c777531578f'>b</a></li></ol></li><li><a href='#05c182ff2d1c37b5349352fe6c85a8f9'>2 关于FilterSendNetBufferListsComplete中的bug</a><ol><li><a href='#aa03d3ebe83d0fb381ff7e5b58de2d70'>关于代码：</a></li></ol></li><li><a href="#content-comments">评论</a></li></ol></div>
+</div></div><div id="body-footer" class="col-md-6 col-md-offset-2"><div class="niu2-footer">
+    <hr/>
+	<p>
+		Powered by <a href="https://github.com/getpelican/pelican">Pelican</a>,
+		©flankersky 
+2014				
+		<a href="http://www.miitbeian.gov.cn">苏ICP备13060073</a>
+        | 			<a href="/about.html" title="about me">关于</a></p>
+    <p class="niu2-icons"></p>
+</div></div><script type="text/javascript">
+	      var _gaq = _gaq || [];
+	      _gaq.push(['_setAccount', 'UA-45005256-1']);
+	      _gaq.push(['_trackPageview']);
+	
+	      (function() {
+	        var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+	        ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+	        var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+	      })();
+	    </script><!-- Include all compiled plugins (below), or include individual files as needed -->
+<script type="text/javascript" src="http://flankersky.com/theme/js/jquery-1.11.0.min.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/niu2.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/bootstrap.min.js"></script>
+
+<script type="text/javascript">
+    onContentLoaded();    </script>
+  </body>
+</html>

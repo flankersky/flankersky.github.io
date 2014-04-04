@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>packet socket进行抓包所引出问题的深层次挖掘 - flanker's sky</title>
+    <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/bootstrap.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/niu2.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/custom.css" type="text/css" />
+<link rel="stylesheet" href="http://flankersky.com/theme/css/pygments/github.css" type="text/css" />    
+    <script type="text/javascript">
+        window.onload = function() {
+        };
+    </script>
+    <!-- HTML5 shim and Respond.js IE8 support of HTML5 elements and media queries -->
+    <!--[if lt IE 9]>
+        <script src="http://flankersky.com/theme/js/html5shiv.js"></script>
+        <script src="http://flankersky.com/theme/js/respond.min.js"></script>
+    <![endif]-->
+    <!--[if IE 7]>
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome-ie7.min.css" type="text/css" />
+    <![endif]--></head>
+  <body> 
+    <div id="body-header"><div class="navbar navbar-inverse navbar-fixed-top">
+<div class="col-md-12">
+    <div class="navbar-header">
+        <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+        </button>
+        <a class="navbar-brand" href="http://flankersky.com">
+            <i class="fa fa-home"></i>flanker's sky
+        </a>
+    </div>
+	<nav class="collapse navbar-collapse bs-navbar-collapse" role="navigation">
+		<ul class="nav navbar-nav"><li><a href="/about.html" title="about me">
+			    <i class="fa fa-anchor"></i>关于</a>
+			</li><!-- category dropdown list -->
+		<li class="dropdown">
+           <a href="#" class="dropdown-toggle" data-toggle="dropdown">
+                <i class="fa fa-folder-open"></i>分类<b class="caret"></b>
+           </a>
+           <ul class="dropdown-menu"><li><a href="http://flankersky.com/linux/index.html"><i class="fa fa-folder-close"></i>linux                      (4)</a></li><li><a href="http://flankersky.com/nginx/index.html"><i class="fa fa-folder-close"></i>nginx                      (3)</a></li><li><a href="http://flankersky.com/windows/index.html"><i class="fa fa-folder-close"></i>windows                      (4)</a></li></ul>
+        </li>
+        <!--  self defined dropdown list --></ul>
+        
+        <!-- right nav bar -->
+		<ul class="nav navbar-nav navbar-right">
+		<!-- google custom search --></ul>
+	</nav>
+</div>
+</div></div>
+    
+    <div id="body-content"><div class="col-md-8 col-md-offset-2"><h1 id="content-heading">packet socket进行抓包所引出问题的深层次挖掘</h1></div>
+<div id="niu2-left-container" class="col-md-6 col-md-offset-2">
+    <div id="niu2-main-content">
+        <p>【本文摘自本人CU论坛】http://blog.chinaunix.net/uid-28980859-id-3981011.html</p>
+<p>&emsp;&emsp;前几天设备突然出现问题，害的我搞到凌晨3点多。当时虽然问题搞定，但对深层次的原因不是很清楚，所以写篇blog记录下，希望帮到遇到类似问题的朋友。</p>
+<p>&emsp;&emsp;问题描述，系统中用的packet socket抓包，但是同样的包，发送的时候却失败了，按道理不应该的。查看日志，是大于1514(MTU 1500 + 以太头 14)的包发送失败了，现实错误时&quot;message too long&quot;。查看抓包的地方，居然抓到了大于1514的包，。其实，对于抓到大于MTU的包，这点我也很疑惑。</p>
+<p>&emsp;&emsp;关于这个问题我想以两个问题的形式把问题及原因引出来.</p>
+<p>问题1：</p>
+<p>&emsp;&emsp;下面这段代码的，rcvbuf 跟 sendbuf 分贝设置设置多大合适？</p>
+<div class="codehilite"><pre>sockfd = socket(AF_INET, SOCK_STREAM, 0);&lt;br /&gt;
+read = recv(sockfd ,rcvbuf,sizeof(rcvbuf), 0);&lt;br /&gt;
+write = send(sockfd ,sendbuf,sizeof(sendbuf), 0);&lt;br /&gt;
+</pre></div>
+
+
+<p>解答：</p>
+<p>&emsp;&emsp;上面的代码是一个正常的tcp socket，两个buf的大小应该是没有大小限制，但是网上说有64k的限制，这一点我没有查阅相关资料，不敢确定。但是，至少有一点是确定的，可以接收或者发送送大于MTU的数据包。<br />
+ps：MTU是链路层的概念，在tcp层是mss，但是为了这里讨论方便，将他俩视为&quot;一个概念&quot;，就是socket(packet 、raw socket)所能发送的最大字节数，二者的区别，可以去google.</p>
+<p>问题2：<br /></p>
+<p>&emsp;&emsp;下面二者的区别？</p>
+<div class="codehilite"><pre>raw_socket = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);&lt;br /&gt;
+packet_socket = socket(PF_PACKET, SOCK_RAW, IPPROTO_TCP);
+</pre></div>
+
+
+<p>解答：</p>
+<p>&emsp;&emsp;第一个是基于AF_INET协议族的raw socket，第二个是基于PF_PACKET的raw socket，都可以用于抓包，但是二者抓包的位置不一样，方式1抓包是在tcp/ip协议层之上，方式2是在链路层抓到的包，所以造成的结果是方式1抓到的包是经过ip层的分片重组的，所以在没有网卡的一些特性的支持下(嘿嘿，下面会说到网卡的一些特性对抓包的 影响)，方式1抓到的其实是数据流，方式2抓到的是单个的数据包。所以用方式1抓包的话，接收buf的大小应该是任意的，但是这点没有验证过，理论上是这 样。现在用方式1抓包的少了，也懒得去验证了，下面见证奇葩，谈下一个问题。</p>
+<p>问题3：</p>
+<p>&emsp;&emsp;下面这段代码的，rcvbuf 跟 sendbuf 分贝设置设置多大合适？</p>
+<div class="codehilite"><pre>read = recv(packet_socket,rcvbuf,sizeof(rcvbuf), 0);&lt;br /&gt;
+write = send(packet_socket ,sendbuf,sizeof(sendbuf), 0);&lt;br /&gt;
+</pre></div>
+
+
+<p>&emsp;&emsp;因为packet socket是在链路层抓包的，所以抓到的包不会经过协议栈，也就不会被分片重组，所以理论上在普通的以太环境中，rcvbuf的大小不能小于 1514(MTU + 14的链路层长度)，因为如果rcvbuf太小的话，比如rcvbuf大小是1400 ，接收到1500的一个包，多余的100字节会被丢弃掉，就会出问题。</p>
+<p>&emsp;&emsp;但是，，，用packet socket确实抓到了大于MTU的包，如何解释？这跟在wireshark中抓包抓到大于MTU的包是一回事，linux wireshark 用的应该也是packet socket。</p>
+<p>难道无解？？？NO!!!!且看下面分解。。</p>
+<p>&emsp;&emsp;先看下关于网卡的一些特性，秘密就在这：</p>
+<p>网卡TSO、UFO、GSO、LRO、GRO和RSS介绍,
+见链接： <a href="http://coolhappy.blog.163.com/blog/static/19285610820121119112017797/">http://coolhappy.blog.163.com/blog/static/19285610820121119112017797/</a></p>
+<p>这里只说TSO，GSO，GRO<br />
+简单点说TSO是用于发送的时候对数据包进行分片的，如果协议栈检测到网卡支持TSO就不会再协议栈层分片，而将整个数据包发送到网卡，由网卡分片后发送出去。<br />
+GSO跟TSO差不多，通用性好点。。<br />
+GRO是用于对接收的数据包进行分片重组的，这样就免去了协议层对数据包进行重组，节省系统资源，提高效率。</p>
+<p>&emsp;&emsp;所以，问题就出在这里，如果开启了GRO，但是没有开TSO的话，就会出现收到大包，却发送失败的问题。但是，单纯打开TSO，用PACKET SOCKET 发包还是会失败，要设置一个socket选项，这个选项的含义没有完全搞明白，内核源码里没有注释，希望知道的朋友不吝赐教。</p>
+<p>相关的网卡设置的命令，及socket选项设置，</p>
+<div class="codehilite"><pre>ethtool -K eth0 tso off/on&lt;br /&gt;
+ethtool -K eth0 gso off/on&lt;br /&gt;
+ethtool -K eth0 gro off/on
+
+int flag = 1;&lt;br /&gt;
+setsockopt(packet_socket,SOL_PACKET,PACKET_VNET_HDR,&amp;amp;flag,sizeof(int));
+</pre></div>
+    </div><div id="content-comments"><!-- Duoshuo Comment BEGIN -->
+<div class="ds-thread"></div>
+<script type="text/javascript">
+    var duoshuoQuery = {short_name:"atime-me"};
+(function() {
+ var ds = document.createElement('script');
+ ds.type = 'text/javascript';ds.async = true;
+ ds.src = 'http://static.duoshuo.com/embed.js';
+ ds.charset = 'UTF-8';
+ (document.getElementsByTagName('head')[0] 
+  || document.getElementsByTagName('body')[0]).appendChild(ds);
+ })();
+</script>
+<!-- Duoshuo Comment END --></div>
+</div>
+<div id="niu2-right-container" class="col-md-3">
+<div id="niu2-sidebar-meta" class="niu2-sidebar">
+    <div class="niu2-sidebar-label"><i class="fa fa-calendar"></i>发布时间:</div>
+    <div class="niu2-sidebar-value">2014-04-01 10:54:45</div>
+<div class="niu2-sidebar-label"><i class="fa fa-open-folder"></i>分类:</div>
+    <div class="niu2-sidebar-value"><a href="http://flankersky.com/linux/index.html">linux</a></div><div class="niu2-sidebar-label"><i class="fa fa-tag"></i>标签:</div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/linux.html">linux</a></div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/kernel.html">kernel</a></div></div>
+
+<div id="niu2-sidebar-toc" class="niu2-sidebar" data-status="closed"><div class="niu2-sidebar-label">
+        <i id="niu2-sidebar-toc-ctrl" class="fa fa-plus"></i>目录
+    </div>
+    <ol id="niu2-sidebar-toc-list">
+        <li><a href="#content-heading">packet socket进行抓包所引出问题的深层次挖掘</a></li>
+        <li><a href="#content-comments">评论</a></li></ol></div>
+</div></div><div id="body-footer" class="col-md-6 col-md-offset-2"><div class="niu2-footer">
+    <hr/>
+	<p>
+		Powered by <a href="https://github.com/getpelican/pelican">Pelican</a>,
+		©flankersky 
+2014				
+		<a href="http://www.miitbeian.gov.cn">苏ICP备13060073</a>
+        | 			<a href="/about.html" title="about me">关于</a></p>
+    <p class="niu2-icons"></p>
+</div></div><script type="text/javascript">
+	      var _gaq = _gaq || [];
+	      _gaq.push(['_setAccount', 'UA-45005256-1']);
+	      _gaq.push(['_trackPageview']);
+	
+	      (function() {
+	        var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+	        ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+	        var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+	      })();
+	    </script><!-- Include all compiled plugins (below), or include individual files as needed -->
+<script type="text/javascript" src="http://flankersky.com/theme/js/jquery-1.11.0.min.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/niu2.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/bootstrap.min.js"></script>
+
+<script type="text/javascript">
+    onContentLoaded();    </script>
+  </body>
+</html>

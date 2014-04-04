@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>如何安全地调用netif_receive_skb - flanker's sky</title>
+    <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/bootstrap.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/niu2.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/custom.css" type="text/css" />
+<link rel="stylesheet" href="http://flankersky.com/theme/css/pygments/github.css" type="text/css" />    
+    <script type="text/javascript">
+        window.onload = function() {
+        };
+    </script>
+    <!-- HTML5 shim and Respond.js IE8 support of HTML5 elements and media queries -->
+    <!--[if lt IE 9]>
+        <script src="http://flankersky.com/theme/js/html5shiv.js"></script>
+        <script src="http://flankersky.com/theme/js/respond.min.js"></script>
+    <![endif]-->
+    <!--[if IE 7]>
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome-ie7.min.css" type="text/css" />
+    <![endif]--></head>
+  <body> 
+    <div id="body-header"><div class="navbar navbar-inverse navbar-fixed-top">
+<div class="col-md-12">
+    <div class="navbar-header">
+        <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+        </button>
+        <a class="navbar-brand" href="http://flankersky.com">
+            <i class="fa fa-home"></i>flanker's sky
+        </a>
+    </div>
+	<nav class="collapse navbar-collapse bs-navbar-collapse" role="navigation">
+		<ul class="nav navbar-nav"><li><a href="/about.html" title="about me">
+			    <i class="fa fa-anchor"></i>关于</a>
+			</li><!-- category dropdown list -->
+		<li class="dropdown">
+           <a href="#" class="dropdown-toggle" data-toggle="dropdown">
+                <i class="fa fa-folder-open"></i>分类<b class="caret"></b>
+           </a>
+           <ul class="dropdown-menu"><li><a href="http://flankersky.com/linux/index.html"><i class="fa fa-folder-close"></i>linux                      (4)</a></li><li><a href="http://flankersky.com/nginx/index.html"><i class="fa fa-folder-close"></i>nginx                      (3)</a></li><li><a href="http://flankersky.com/windows/index.html"><i class="fa fa-folder-close"></i>windows                      (4)</a></li></ul>
+        </li>
+        <!--  self defined dropdown list --></ul>
+        
+        <!-- right nav bar -->
+		<ul class="nav navbar-nav navbar-right">
+		<!-- google custom search --></ul>
+	</nav>
+</div>
+</div></div>
+    
+    <div id="body-content"><div class="col-md-8 col-md-offset-2"><h1 id="content-heading">如何安全地调用netif_receive_skb</h1></div>
+<div id="niu2-left-container" class="col-md-6 col-md-offset-2">
+    <div id="niu2-main-content">
+        <p>本文是探讨如何安全的调用netif_receive_skb，不是为了分析NAPI。</p>
+<p>声明：本文用到的内核源码版本是linux-3.2.6,e1000e的驱动版本是e1000e-2.2.3.
+这里先做总结，因为代码分析部分有复杂，没看过这部分源码的可能会比较晕，其实我自己都很晕。</p>
+<h2 id="18b98b06aa3c9a21162b5f0db3e37d88">结论:</h2>
+<h3 id="88d0e7ff70b62460385e21ccf2f6d432">非NAPI方式的函数调用：</h3>
+<div class="codehilite"><pre>e1000_intr-&gt;e1000_clean_rx_irq-&gt;e1000_receive_skb-&gt;netif_rx-&gt;enqueue_to_backlog-&gt;____napi_schedule-&gt;
+
+__raise_softirq_irqoff-&gt;net_rx_action-&gt;net_rx_action-&gt;poll(默认的poll函数process_backlog)-&gt;netif_receive_skb
+</pre></div>
+
+
+<p>说明：带下划线的部分与之前的代码没有直接调用关系，下划线部分是软中断里的代码，俗称“下半部/底半部”</p>
+<h3 id="a91401e7999e8ced66d4bef1144ca478">NAPI方式:</h3>
+<div class="codehilite"><pre>e1000_intr-&gt;__napi_schedule-&gt;__raise_softirq_irqoff-&gt;net_rx_action-&gt;poll(一般是由驱动添加的poll函
+
+数)-&gt;e1000_clean_rx_irq-&gt;e1000_receive_skb-&gt;netif_receive_skb
+</pre></div>
+
+
+<p>这篇文章不是为了讨论NAPI的，是为了前一片文章中的那个BUG，就是在内核空间没有任何保护的情况下调用netif_receive_skb导致的死锁问题，从上面的调用过程看，<em>netif_receive_skb</em> 的调用都是在软中断上下文里调用的<em>，所以，我们自己调用的时候也要加一定的保护，比如，禁止软中断。调用 </em>netif_rx<em> 就不会出现死锁，因为 </em>netif_rx* 是去触发软中断的，所以不会存在于软中断上下文中。所以简单的调用netif_rx就可以解决问题了。目前测试情况看，没有载出现过问题。</p>
+<p>下面就是详细的代码分析过程，目的就是为了总结出上面的那两个函数调用过程。这类文章网上也很多，但有时候跟自己的内核源码对不上，因为内核的代码是不断更新的。所以要根据自己的实际情况，自己动手分析。留着以后忘了也可以看。看的时候最好对照源码来看。。。</p>
+<p>为了从下到上的说明数据包的接收流程，我们不得不从驱动层说起，拿e1000说事吧。</p>
+<div class="codehilite"><pre>/**
+
+ * e1000_intr – Interrupt Handler
+
+ * @irq: interrupt number
+
+ * @data: pointer to a network interface device structure
+
+ **/
+
+/*中断处理函数*/
+
+static irqreturn_t e1000_intr(int __always_unused irq, void *data)
+
+{
+
+………………
+
+/*前面是一些检测的东西，不详细说了。下面的是重点。
+
+代码的接收分为NAPI方式与非NAPI方式。什么是NAPI，问问google。
+
+但是二者的代码流程，下面都会详细分析。
+
+先分析非NAPI方式
+
+*/
+
+#ifdef CONFIG_E1000E_NAPI
+
+
+
+      if (napi_schedule_prep(&amp;adapter-&gt;napi)) {
+
+            adapter-&gt;total_tx_bytes = 0;
+
+            adapter-&gt;total_tx_packets = 0;
+
+            adapter-&gt;total_rx_bytes = 0;
+
+            adapter-&gt;total_rx_packets = 0;
+
+            __napi_schedule(&amp;adapter-&gt;napi);
+
+      }
+
+#else
+
+/*非NAPI方式*/
+
+      adapter-&gt;total_tx_bytes = 0;
+
+      adapter-&gt;total_rx_bytes = 0;
+
+      adapter-&gt;total_tx_packets = 0;
+
+      adapter-&gt;total_rx_packets = 0;
+
+      for (i = 0; i &lt; E1000_MAX_INTR; i++) {
+
+            /*clean_rx是在初始化时指定的，一般都是 e1000_clean_rx_irq()*/
+
+rx_cleaned = adapter-&gt;clean_rx(adapter-&gt;rx_ring);
+
+            tx_cleaned_complete = e1000_clean_tx_irq(adapter-&gt;tx_ring);
+
+            if (!rx_cleaned &amp;&amp; tx_cleaned_complete)
+
+                  break;
+
+      }
+
+      if (likely(adapter-&gt;itr_setting &amp; 3))
+
+            e1000_set_itr(adapter);
+
+#endif /* CONFIG_E1000E_NAPI */
+
+      return IRQ_HANDLED;
+
+}
+</pre></div>
+
+
+<h3 id="50eab91c3f8ab2ce2b1c885c65755ceb">在非NAPI的情况下，调用过程如下：</h3>
+<div class="codehilite"><pre>e1000_clean_rx_irq()-&gt;e1000_receive_skb()-&gt;netif_rx.
+
+netif_rx是一个老接口。
+
+在/net/core/dev.c
+
+int netif_rx(struct sk_buff *skb)
+
+{
+
+      int ret;
+
+
+
+      /* if netpoll wants it, pretend we never saw it */
+
+/*netpoll是用于让内核在网络和I/O子系统尚不能完整可用时,依然能   发送和接收数
+
+据包,主要用于网络控制台和远程。所以这里不考虑netpoll*/
+
+      if (netpoll_rx(skb))
+
+            return NET_RX_DROP;
+
+/*时间戳检查*/
+
+      if (netdev_tstamp_prequeue)
+
+            net_timestamp_check(skb);
+
+/*刚开始看这个函数有点蒙，找不到定义，简单查了点资料，是里怒下内核里的函数追
+
+ 踪点，调试用的。这里先不做讨论*/
+
+      trace_netif_rx(skb);
+
+#ifdef CONFIG_RPS
+
+      {
+
+/*关于RPS（google的一个patch，简单说，多核情况下对数据包接收的优化，负载均衡，以后再探讨）的代码，这里先不做讨论，暂且认为它是关闭的。*/
+
+      }
+
+#else
+
+      {
+
+            unsigned int qtail;
+
+/*这才是重点，看下面。。*/
+
+            ret = enqueue_to_backlog(skb, get_cpu(), &amp;qtail);
+
+            put_cpu();
+
+      }
+
+#endif
+
+      return ret;
+
+}
+
+/*softnet_data的结构*/
+
+/*
+
+ * Incoming packets are placed on per-cpu queues
+
+ */
+
+struct softnet_data {
+
+      struct Qdisc          *output_queue;
+
+      struct Qdisc          **output_queue_tailp;
+
+      struct list_head    poll_list;
+
+      struct sk_buff       *completion_queue;
+
+      struct sk_buff_head   process_queue;
+
+
+
+      /* stats */
+
+      unsigned int         processed;
+
+      unsigned int         time_squeeze;
+
+      unsigned int         cpu_collision;
+
+      unsigned int         received_rps;
+
+
+
+#ifdef CONFIG_RPS
+
+      struct softnet_data    *rps_ipi_list;
+
+
+
+      /* Elements below can be accessed between CPUs for RPS */
+
+      struct call_single_data    csd ____cacheline_aligned_in_smp;
+
+      struct softnet_data    *rps_ipi_next;
+
+      unsigned int         cpu;
+
+      unsigned int         input_queue_head;
+
+      unsigned int         input_queue_tail;
+
+#endif
+
+      unsigned         dropped;
+
+      struct sk_buff_head   input_pkt_queue;
+
+      struct napi_struct backlog;
+
+};
+
+/*
+
+ * enqueue_to_backlog is called to queue an skb to a per CPU backlog
+
+ * queue (may be a remote CPU queue).
+
+ */
+
+/*将SKB链入softnet_data的input_pkt_queue，softnet_data是一个per-CPU结构，如上所示。*/
+
+static int enqueue_to_backlog(struct sk_buff *skb, int cpu,
+
+                        unsigned int *qtail)
+
+{   
+      struct softnet_data *sd;
+      unsigned long flags;  
+/*取得相应cpu里的softnet_data。*/
+
+      sd = &amp;per_cpu(softnet_data, cpu);
+      local_irq_save(flags);
+      rps_lock(sd);
+
+/*检查接收队列是否已满，如果满了，则丢弃该数据包*/
+
+      if (skb_queue_len(&amp;sd-&gt;input_pkt_queue) &lt;= netdev_max_backlog) {
+
+/*检查队列是否是0，只有是0才去触发软中断，因为如果不是0，说明在这之前已经触发了相应的软中断，没有必要重复触发。*/
+
+            if (skb_queue_len(&amp;sd-&gt;input_pkt_queue)) {
+
+enqueue:
+
+                  __skb_queue_tail(&amp;sd-&gt;input_pkt_queue, skb);
+
+                  input_queue_tail_incr_save(sd, qtail);
+
+                  rps_unlock(sd);
+
+                  local_irq_restore(flags);
+
+                  return NET_RX_SUCCESS;
+
+            }
+
+            /* Schedule NAPI for backlog device
+
+             * We can use non atomic operation since we own the queue lock
+
+             */
+
+            if (!__test_and_set_bit(NAPI_STATE_SCHED, &amp;sd-&gt;backlog.state)) {
+
+                  if (!rps_ipi_queued(sd))
+
+/*触发软中断*/
+
+                        ____napi_schedule(sd, &amp;sd-&gt;backlog);
+
+            }
+
+            goto enqueue;
+
+      }
+      sd-&gt;dropped++;
+
+      rps_unlock(sd);
+
+      local_irq_restore(flags);
+      atomic_long_inc(&amp;skb-&gt;dev-&gt;rx_dropped);
+
+      kfree_skb(skb);
+
+      return NET_RX_DROP;
+
+}
+
+
+/* Called with irq disabled */
+
+static inline void ____napi_schedule(struct softnet_data *sd,   
+                             struct napi_struct *napi)
+
+{
+      list_add_tail(&amp;napi-&gt;poll_list, &amp;sd-&gt;poll_list);
+
+      /*
+
+触发软中断，软中断处理函数是在/net/core/dev.c:net_dev_init()中初始化的，
+
+NET_RX_SOFTIRQ对应的处理函数是net_rx_action()
+
+*/
+
+__raise_softirq_irqoff(NET_RX_SOFTIRQ);
+
+}
+</pre></div>
+
+
+<p>其实到上面为止，网络数据处理的顶半部（Top Half） 已经处理完了，剩下的就是底半部(bottom half)的事情了。什么是顶半部，什么是底半部？</p>
+<p>这个在LDD中有讲到。简单说，每次中断都需要完成一定数量的工作，但是我们又希望每次中断占用的时间不要太长，于是，这就产生了矛盾。为了调和这种矛盾，引入了顶半部 底半部，顶半部用来响应实际的硬件中断，顶半部的主要任务就是将中断任务进行简单的处理，然后就交给底半部处理，底半部则在稍后一个比较安全的时间里(硬件中断开启)慢慢悠悠的处理那些耗时的任务。</p>
+<p>下面再看一下net_rx_action()</p>
+<div class="codehilite"><pre>static void net_rx_action(struct softirq_action *h)
+
+{
+
+  struct softnet_data *sd = &amp;__get_cpu_var(softnet_data);
+
+  unsigned long time_limit = jiffies + 2;
+
+  int budget = netdev_budget;
+
+  void *have;
+
+  local_irq_disable();
+
+  /*
+
+不为空，因为前面有个list_add_tail(&amp;napi-&gt;poll_list, &amp;sd-&gt;poll_list);
+    */
+
+  while (!list_empty(&amp;sd-&gt;poll_list)) {
+
+        struct napi_struct *n;
+
+        int work, weight;
+
+
+
+        /* If softirq window is exhuasted then punt.
+
+         * Allow this to run for 2 jiffies since which will allow
+
+         * an average latency of 1.5/HZ.
+
+         */
+
+        if (unlikely(budget &lt;= 0 || time_after(jiffies, time_limit)))
+
+              goto softnet_break;
+
+
+
+        local_irq_enable();
+
+
+
+        /* Even though interrupts have been re-enabled, this
+
+         * access is safe because interrupts can only add new
+
+         * entries to the tail of this list, and only -&gt;poll()
+
+         * calls can remove this head entry from the list.
+
+         */
+
+/*取得sd-&gt;backlog，是怎么取到的？
+
+在前面的____napi_schedule()里有个函数，
+
+list_add_tail(&amp;napi-&gt;poll_list, &amp;sd-&gt;poll_list);
+
+所以就相当与通过napi-&gt;poll_list取到napi。
+
+    */
+
+        n = list_first_entry(&amp;sd-&gt;poll_list, struct napi_struct, poll_list);
+
+
+
+        have = netpoll_poll_lock(n);
+
+/*在net_dev_init()中有初始化weight，默认是64.该值具体作用不是很清楚，从代 码，当work == weight，或者budget &lt; 0 时，软中断会结束，所以，这个weight 与 bgdget决定了每次软中断处理的数据包的总数。Weight应该是随着带宽的增加而增加的。64是百兆环境的推荐值。*/
+
+        weight = n-&gt;weight;
+
+
+
+        /* This NAPI_STATE_SCHED test is for avoiding a race
+
+         * with netpoll&#39;s poll_napi().  Only the entity which
+
+         * obtains the lock and sees NAPI_STATE_SCHED set will
+
+         * actually make the -&gt;poll() call.  Therefore we avoid
+
+         * accidentally calling -&gt;poll() when NAPI is not scheduled.
+
+         */
+
+        work = 0;
+
+        if (test_bit(NAPI_STATE_SCHED, &amp;n-&gt;state)) {
+
+              /*poll在net_dev_init()进行初始化，初始是process_backlog()。在napi环境下该指针会被重写。下面会讨论*/
+
+              work = n-&gt;poll(n, weight);
+
+              trace_napi_poll(n);
+
+        }
+
+
+
+        WARN_ON_ONCE(work &gt; weight);
+
+
+
+        budget -= work;
+
+
+
+        local_irq_disable();
+
+
+
+        /* Drivers must not modify the NAPI state if they
+
+         * consume the entire weight.  In such cases this code
+
+         * still &quot;owns&quot; the NAPI instance and therefore can
+
+         * move the instance around on the list at-will.
+
+         */
+
+        /*处理的数据包等于weight，软中断结束*/
+
+        if (unlikely(work == weight)) {
+
+              if (unlikely(napi_disable_pending(n))) {
+
+                    local_irq_enable();
+
+                    napi_complete(n);
+
+                    local_irq_disable();
+
+              } else
+
+                    list_move_tail(&amp;n-&gt;poll_list, &amp;sd-&gt;poll_list);
+
+        }
+
+
+
+        netpoll_poll_unlock(have);
+
+  }
+
+out:
+
+  net_rps_action_and_irq_enable(sd);
+
+
+
+#ifdef CONFIG_NET_DMA
+
+  /*
+
+   * There may not be any more sk_buffs coming right now, so push
+
+   * any pending DMA copies to hardware
+
+   */
+
+  dma_issue_pending_all();
+
+#endif
+
+  return;
+
+softnet_break:
+
+  sd-&gt;time_squeeze++;
+
+  __raise_softirq_irqoff(NET_RX_SOFTIRQ);
+
+  goto out;
+
+}
+
+
+
+/*非napi的处理函数，虽然说是非napi，但是函数里出现了napi_struct，其实这是为了兼容性的原因，等讲完NAPI方式就会明白了。另外还要注意，该函数中对process_queue 与 input_pkt_queue的灵活处理，估计也是为了某种兼容*/
+
+static int process_backlog(struct napi_struct *napi, int quota)
+
+{
+
+ …..
+
+  while (work &lt; quota) {
+
+        struct sk_buff *skb;
+
+        unsigned int qlen;
+
+
+
+        while ((skb = __skb_dequeue(&amp;sd-&gt;process_queue))) {
+
+              …….
+
+/*最终调用的是__netif_receive_skb，下面会分析该函数*/
+
+              __netif_receive_skb(skb);
+
+             …….
+
+        }
+
+
+        rps_lock(sd);
+
+        qlen = skb_queue_len(&amp;sd-&gt;input_pkt_queue);
+
+        if (qlen)
+
+              skb_queue_splice_tail_init(&amp;sd-&gt;input_pkt_queue,
+
+                                   &amp;sd-&gt;process_queue);
+
+     ………
+
+        }
+
+        rps_unlock(sd);
+
+  }
+
+}
+</pre></div>
+
+
+<p>———————————————华丽的分割线———————————————————–</p>
+<p>下面讲另一个函数NAPI方式.
+还是从e1000e的驱动说起。
+上面提到的e1000e的中断处理函数，</p>
+<div class="codehilite"><pre>/*中断处理函数*/
+
+static irqreturn_t e1000_intr(int __always_unused irq, void *data)
+
+{
+
+………………
+
+/*前面是一些检测的东西，不详细说了。下面的是重点。
+
+代码的接收分为NAPI方式与非NAPI方式。什么是NAPI，问问google。
+
+但是二者的代码流程，下面都会详细分析。
+
+先分析非NAPI方式
+
+*/
+
+#ifdef CONFIG_E1000E_NAPI
+
+/*NAPI方式*/
+
+  if (napi_schedule_prep(&amp;adapter-&gt;napi)) {
+
+        adapter-&gt;total_tx_bytes = 0;
+
+        adapter-&gt;total_tx_packets = 0;
+
+        adapter-&gt;total_rx_bytes = 0;
+
+        adapter-&gt;total_rx_packets = 0;
+
+        __napi_schedule(&amp;adapter-&gt;napi);
+
+  }
+
+#else
+
+/*非NAPI方式*/
+
+  adapter-&gt;total_tx_bytes = 0;
+
+  adapter-&gt;total_rx_bytes = 0;
+
+  adapter-&gt;total_tx_packets = 0;
+
+  adapter-&gt;total_rx_packets = 0;
+
+
+
+  for (i = 0; i &lt; E1000_MAX_INTR; i++) {
+
+        /*clean_rx是在初始化时指定的，一般都是 e1000_clean_rx_irq()*/
+
+rx_cleaned = adapter-&gt;clean_rx(adapter-&gt;rx_ring);
+
+        tx_cleaned_complete = e1000_clean_tx_irq(adapter-&gt;tx_ring);
+
+        if (!rx_cleaned &amp;&amp; tx_cleaned_complete)
+
+              break;
+
+  }
+
+  if (likely(adapter-&gt;itr_setting &amp; 3))
+
+        e1000_set_itr(adapter);
+
+#endif /* CONFIG_E1000E_NAPI */
+
+  return IRQ_HANDLED;
+</pre></div>
+
+
+<p>}</p>
+<p><em>__napi_schedule(&amp;adapter-&gt;napi);</em> 该函数与上面非NAPI的 <em>____napi_schedule(struct softnet_data </em>sd, struct napi_struct <em>napi)</em> 的参数不一样，前者是后者的包裹函数。唯一不同的是二者调度的napi不一样，前者调度的是设备的napi结构，后者调度的是<em>softnet_data</em> 的napi，而对应的napi的poll函数是不一样的。</p>
+<p>在e1000e初始化时，已经调用netif_napi_add(netdev, &amp;adapter-&gt;napi, e1000e_poll, 64);将napi的poll替换掉了。简单说下调用过程：</p>
+<p>e1000e_poll-&gt;e1000_clean_rx_irq-&gt;e1000_receive_skb-&gt;netif_receive_skb.</p>
+<p>大致上分析完了，现在应该可以看明白最上面的结论了吧。 </p>
+    </div><div id="content-comments"><!-- Duoshuo Comment BEGIN -->
+<div class="ds-thread"></div>
+<script type="text/javascript">
+    var duoshuoQuery = {short_name:"atime-me"};
+(function() {
+ var ds = document.createElement('script');
+ ds.type = 'text/javascript';ds.async = true;
+ ds.src = 'http://static.duoshuo.com/embed.js';
+ ds.charset = 'UTF-8';
+ (document.getElementsByTagName('head')[0] 
+  || document.getElementsByTagName('body')[0]).appendChild(ds);
+ })();
+</script>
+<!-- Duoshuo Comment END --></div>
+</div>
+<div id="niu2-right-container" class="col-md-3">
+<div id="niu2-sidebar-meta" class="niu2-sidebar">
+    <div class="niu2-sidebar-label"><i class="fa fa-calendar"></i>发布时间:</div>
+    <div class="niu2-sidebar-value">2014-04-01 10:52:14</div>
+<div class="niu2-sidebar-label"><i class="fa fa-open-folder"></i>分类:</div>
+    <div class="niu2-sidebar-value"><a href="http://flankersky.com/linux/index.html">linux</a></div><div class="niu2-sidebar-label"><i class="fa fa-tag"></i>标签:</div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/linux.html">linux</a></div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/kernel.html">kernel</a></div></div>
+
+<div id="niu2-sidebar-toc" class="niu2-sidebar" data-status="closed"><div class="niu2-sidebar-label">
+        <i id="niu2-sidebar-toc-ctrl" class="fa fa-plus"></i>目录
+    </div>
+    <ol id="niu2-sidebar-toc-list">
+        <li><a href="#content-heading">如何安全地调用netif_receive_skb</a></li>
+        <li><a href='#18b98b06aa3c9a21162b5f0db3e37d88'>结论:</a><ol><li><a href='#88d0e7ff70b62460385e21ccf2f6d432'>非NAPI方式的函数调用：</a></li><li><a href='#a91401e7999e8ced66d4bef1144ca478'>NAPI方式:</a></li><li><a href='#50eab91c3f8ab2ce2b1c885c65755ceb'>在非NAPI的情况下，调用过程如下：</a></li></ol></li><li><a href="#content-comments">评论</a></li></ol></div>
+</div></div><div id="body-footer" class="col-md-6 col-md-offset-2"><div class="niu2-footer">
+    <hr/>
+	<p>
+		Powered by <a href="https://github.com/getpelican/pelican">Pelican</a>,
+		©flankersky 
+2014				
+		<a href="http://www.miitbeian.gov.cn">苏ICP备13060073</a>
+        | 			<a href="/about.html" title="about me">关于</a></p>
+    <p class="niu2-icons"></p>
+</div></div><script type="text/javascript">
+	      var _gaq = _gaq || [];
+	      _gaq.push(['_setAccount', 'UA-45005256-1']);
+	      _gaq.push(['_trackPageview']);
+	
+	      (function() {
+	        var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+	        ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+	        var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+	      })();
+	    </script><!-- Include all compiled plugins (below), or include individual files as needed -->
+<script type="text/javascript" src="http://flankersky.com/theme/js/jquery-1.11.0.min.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/niu2.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/bootstrap.min.js"></script>
+
+<script type="text/javascript">
+    onContentLoaded();    </script>
+  </body>
+</html>

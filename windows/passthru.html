@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>在passthru的基础上实现转发 - flanker's sky</title>
+    <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/bootstrap.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/niu2.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/custom.css" type="text/css" />
+<link rel="stylesheet" href="http://flankersky.com/theme/css/pygments/github.css" type="text/css" />    
+    <script type="text/javascript">
+        window.onload = function() {
+        };
+    </script>
+    <!-- HTML5 shim and Respond.js IE8 support of HTML5 elements and media queries -->
+    <!--[if lt IE 9]>
+        <script src="http://flankersky.com/theme/js/html5shiv.js"></script>
+        <script src="http://flankersky.com/theme/js/respond.min.js"></script>
+    <![endif]-->
+    <!--[if IE 7]>
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome-ie7.min.css" type="text/css" />
+    <![endif]--></head>
+  <body> 
+    <div id="body-header"><div class="navbar navbar-inverse navbar-fixed-top">
+<div class="col-md-12">
+    <div class="navbar-header">
+        <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+        </button>
+        <a class="navbar-brand" href="http://flankersky.com">
+            <i class="fa fa-home"></i>flanker's sky
+        </a>
+    </div>
+	<nav class="collapse navbar-collapse bs-navbar-collapse" role="navigation">
+		<ul class="nav navbar-nav"><li><a href="/about.html" title="about me">
+			    <i class="fa fa-anchor"></i>关于</a>
+			</li><!-- category dropdown list -->
+		<li class="dropdown">
+           <a href="#" class="dropdown-toggle" data-toggle="dropdown">
+                <i class="fa fa-folder-open"></i>分类<b class="caret"></b>
+           </a>
+           <ul class="dropdown-menu"><li><a href="http://flankersky.com/linux/index.html"><i class="fa fa-folder-close"></i>linux                      (4)</a></li><li><a href="http://flankersky.com/nginx/index.html"><i class="fa fa-folder-close"></i>nginx                      (3)</a></li><li><a href="http://flankersky.com/windows/index.html"><i class="fa fa-folder-close"></i>windows                      (4)</a></li></ul>
+        </li>
+        <!--  self defined dropdown list --></ul>
+        
+        <!-- right nav bar -->
+		<ul class="nav navbar-nav navbar-right">
+		<!-- google custom search --></ul>
+	</nav>
+</div>
+</div></div>
+    
+    <div id="body-content"><div class="col-md-8 col-md-offset-2"><h1 id="content-heading">在passthru的基础上实现转发</h1></div>
+<div id="niu2-left-container" class="col-md-6 col-md-offset-2">
+    <div id="niu2-main-content">
+        <p>&emsp;&emsp;俗话说，万事开头难。这几天真是深深的体会到了。搞个NDIS的转发都快把头发整白了。当初以为有了linux内核的那点基础，多少能好搞一点。现在才发现，windows真是“博大精深”啊。另外，关于windows与linux，开源与闭源，个人觉得，没必要用“道德”绑架一个人或是一个公司或是一个产品，产品好不好，体验说了算，与什么开源精神毫无关系。所以，不要整天用着盗版的windows还说什么MS无耻，linux伟大之类的，做人要厚道。</p>
+<p>&emsp;&emsp;关于在NDIS层做NAT转发，主要是参考了《寒江独钓》这本书，还有以下的一些文章，
+在此表示感谢。
+<a href="http://www.xfocus.net/articles/200606/870.html">http://www.xfocus.net/articles/200606/870.html</a>
+<a href="http://bbs3.driverdevelop.com/read.php?tid-69927.html">http://bbs3.driverdevelop.com/read.php?tid-69927.html</a></p>
+<p>现将代码公布出来，
+Passthru 转发代码：
+<a href="http://pan.baidu.com/s/1EgrWa">http://pan.baidu.com/s/1EgrWa</a> 密码： l5cv</p>
+<p>设置网卡混杂模式代码（deviceiocontrol尝试未成功）：
+<a href="http://pan.baidu.com/s/1dDBYtA5">http://pan.baidu.com/s/1dDBYtA5</a> 密码： o2fc</p>
+<p>关于设置混杂模式，也有人说可以在MPSetInformation 添加如下代码</p>
+<div class="codehilite"><pre>if (OID_GEN_CURRENT_PACKET_FILTER == Oid){
+
+RtlCopyMemory(&amp;amp;aMode,InformationBuffer,sizeof(ULONG));
+
+aMode |= NDIS_PACKET_TYPE_PROMISCUOUS;
+
+RtlCopyMemory(InformationBuffer,&amp;amp;aMode,sizeof(ULONG));
+DbgPrint(&quot;here\r\n&quot;);
+}
+</pre></div>
+
+
+<p>&emsp;&emsp;实测确实可行，因为每次在加载passthru的时候，驱动都会收到上层的set 请求。是谁发起的就不得而知了。</p>
+<p>&emsp;&emsp;代码只是实现了纯粹的转发，不是很复杂，只是希望能对刚入门的小伙伴一点帮助。
+代码是在NDIS 5.1(windows xp sp3)上测试通过的。只是进行了短时间的测试，不保证完全没有错误。
+&emsp;&emsp;最后，关于这其中存在的一个问题，希望知道的朋友能给点提示。如下：
+在开启windbg双机调试的时候，（在虚拟机中转发）会出现数据包环回的情况，非调试态则是正常的。当初以为是虚拟机网卡桥接的原因，后来改成host-only并配合其它工具测试，结果也是一样。实在是不知道为什么，望高人指点</p>
+    </div><div id="content-comments"><!-- Duoshuo Comment BEGIN -->
+<div class="ds-thread"></div>
+<script type="text/javascript">
+    var duoshuoQuery = {short_name:"atime-me"};
+(function() {
+ var ds = document.createElement('script');
+ ds.type = 'text/javascript';ds.async = true;
+ ds.src = 'http://static.duoshuo.com/embed.js';
+ ds.charset = 'UTF-8';
+ (document.getElementsByTagName('head')[0] 
+  || document.getElementsByTagName('body')[0]).appendChild(ds);
+ })();
+</script>
+<!-- Duoshuo Comment END --></div>
+</div>
+<div id="niu2-right-container" class="col-md-3">
+<div id="niu2-sidebar-meta" class="niu2-sidebar">
+    <div class="niu2-sidebar-label"><i class="fa fa-calendar"></i>发布时间:</div>
+    <div class="niu2-sidebar-value">2014-04-01 11:05:57</div>
+<div class="niu2-sidebar-label"><i class="fa fa-open-folder"></i>分类:</div>
+    <div class="niu2-sidebar-value"><a href="http://flankersky.com/windows/index.html">windows</a></div><div class="niu2-sidebar-label"><i class="fa fa-tag"></i>标签:</div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/windows.html">windows</a></div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/passthru.html">passthru</a></div></div>
+
+<div id="niu2-sidebar-toc" class="niu2-sidebar" data-status="closed"><div class="niu2-sidebar-label">
+        <i id="niu2-sidebar-toc-ctrl" class="fa fa-plus"></i>目录
+    </div>
+    <ol id="niu2-sidebar-toc-list">
+        <li><a href="#content-heading">在passthru的基础上实现转发</a></li>
+        <li><a href="#content-comments">评论</a></li></ol></div>
+</div></div><div id="body-footer" class="col-md-6 col-md-offset-2"><div class="niu2-footer">
+    <hr/>
+	<p>
+		Powered by <a href="https://github.com/getpelican/pelican">Pelican</a>,
+		©flankersky 
+2014				
+		<a href="http://www.miitbeian.gov.cn">苏ICP备13060073</a>
+        | 			<a href="/about.html" title="about me">关于</a></p>
+    <p class="niu2-icons"></p>
+</div></div><script type="text/javascript">
+	      var _gaq = _gaq || [];
+	      _gaq.push(['_setAccount', 'UA-45005256-1']);
+	      _gaq.push(['_trackPageview']);
+	
+	      (function() {
+	        var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+	        ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+	        var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+	      })();
+	    </script><!-- Include all compiled plugins (below), or include individual files as needed -->
+<script type="text/javascript" src="http://flankersky.com/theme/js/jquery-1.11.0.min.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/niu2.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/bootstrap.min.js"></script>
+
+<script type="text/javascript">
+    onContentLoaded();    </script>
+  </body>
+</html>

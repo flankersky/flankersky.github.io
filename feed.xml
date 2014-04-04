@@ -1,0 +1,2333 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>flanker's sky</title><link>http://flankersky.com/</link><description></description><atom:link href="http://flankersky.com/feed.xml" rel="self"></atom:link><lastBuildDate>Tue, 01 Apr 2014 11:06:36 +0800</lastBuildDate><item><title>在NDIS6.x的filter基础上的转发</title><link>http://flankersky.com/windows/win7filter.html</link><description>&lt;p&gt;&amp;emsp;&amp;emsp;最近搞windows驱动，想把以前的一个业务搬到windows平台上，走了不少的弯路。这可能是固有思维的缘故吧，因为这个功能在linux上市已经做完了的，但是改动了linux的内核源码（协议栈的路由部分），所以就想都没有想，以为也要移植一个协议栈到windows，于是乎废了很长时间，尝试移植ReactOS的协议栈到windows xp下，后来移植上去之后发现，ROS毕竟是精简过的，很多IRP操作没有定义，所以要想此协议栈正常工作，要么增加这个IRP对应的代码，要么连上层的AFD.sys winsock.dll都移植过来，不过这两种方案工作量都太大了，对我这个菜鸟来说太难了。所以，只能寻找其他出路，还好，是找到了。感慨一下，下面说正题。代码链接在最下面. &lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;这里只想说一下在NDIS6.x之后的中间层驱动，可能不能叫它中间层驱动了，因为相比NDIS5.1，MS又进行了进一步的封装，原先的那种复杂的堆叠方式已经不明显了，不过，倒是更灵活了，比如你可以单独的只过滤接收或者发送的数据包。如果我是先学的NDIS6.x的filter，后学的NDIS5.1的passthru的话，我肯定会觉得passthru是坨翔，简单一个字“乱”。
+闲话不扯了，这里就是想贴一下在filter的基础上做转发的代码，按照惯例，先推荐几篇自己看的blog，收益颇多，在此表示感谢。
+&lt;a href="http://bbs.pediy.com/showthread.php?t=183801"&gt;http://bbs.pediy.com/showthread.php?t=183801&lt;/a&gt;&lt;/p&gt;
+&lt;p&gt;&lt;a href="http://yexin218.iteye.com/blog/645257#bc2339067"&gt;http://yexin218.iteye.com/blog/645257#bc2339067&lt;/a&gt;&lt;/p&gt;
+&lt;p&gt;&lt;a href="http://www.codecho.com/tag/filter-driver/page/2/"&gt;http://www.codecho.com/tag/filter-driver/page/2/&lt;/a&gt; &lt;/p&gt;
+&lt;p&gt;尤其是第二篇blog，里面有部分代码，本人也借鉴了不少，在此跪谢。但是，我又不得不指出其中一个bug，会引起BSOD。详情见下面第2点。 &lt;/p&gt;
+&lt;p&gt;&lt;strong&gt;关于代码只说两点，一个知识点，一个上面第二篇blog中隐含的bug。 &lt;/strong&gt;&lt;/p&gt;
+&lt;h3 id="63e1507c0cbeb184c08ad00f4d7cae70"&gt;1 关于NBL NB MDL的关系&lt;/h3&gt;
+&lt;h4 id="0cc175b9c0f1b6a831c399e269772661"&gt;a&lt;/h4&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;在NDIS5.1中的数据包的基本单位是NDIS_PACKET。但是在NDIS6.1中变成了NET_BUFFER。
+NBL是由NB组成的链表，理论上NBL中会有多个NB，但是看WDK的如下文档：&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;In the receive path, miniport drivers can use a list of NET_BUFFER_LIST structures to indicate receives.
+Each NET_BUFFER_LIST indicated by a miniport driver contains one NET_BUFFER structure.
+&amp;emsp;&amp;emsp;However, Native 802.11 drivers can have more than one NET_BUFFER structure.
+Because a different protocol binding can process each NET_BUFFER_LIST structure, NDIS can return each NET_BUFFER_LIST structure to the miniport driver independently.&lt;/p&gt;
+&lt;p&gt;就是说，一般情况下，一个NBL只有一个NB，除非在Native 802.11 的情况下，本人的中图省事，就只考虑了一种情况。对于NBL的多个NB也是有要求的，见下面WDK的文档： &lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;If a driver originates a send request, the driver should allocate a NET_BUFFER_LIST structure for the Ethernet frames. The NetBufferListInfo member in each NET_BUFFER_LIST structure must include the out-of-band (OOB) data that is required for the particular use. The OOB data applies to all of the NET_BUFFER structures that are associated with a NET_BUFFER_LIST structure.
+If a driver originates a send request, the driver should allocate one or more NET_BUFFER structures for the Ethernet frames and link these structures to the NET_BUFFER_LIST structure. Each NET_BUFFER structure that is linked to a NET_BUFFER_LIST structure describes a single Ethernet frame.
+All NET_BUFFER structures that are associated with a NET_BUFFER_LIST structure must have the same Ethernet frame type and IP protocol version (IPv4 or IPv6).
+All NET_BUFFER structures that are associated with a NET_BUFFER_LIST structure must have the same source and destination MAC addresses.
+If a driver is sending TCP or UDP frames, all of the NET_BUFFER structures that are associated with a NET_BUFFER_LIST structure must be associated with same TCP or UDP connection. &lt;/p&gt;
+&lt;h4 id="92eb5ffee6ae2fec3ad71c777531578f"&gt;b&lt;/h4&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;一个NB会包含多个MDL，MDL是把逻辑上不连续的内存给连续了起来，比如一个数据包的内容的前半部分在第一个MDL的尾部，后半部分在下一个MDL的头部。具体的MDL的读取看：
+http://yexin218.iteye.com/blog/532184
+很重要的一点就是，MDL的长度不等于数据的长度，真正的数据的长度是保存在NB中的。
+c. 在接收路径上FilterReceiveNetBufferLists上可以看到，底层的miniport是可以一次indicate多个NBL的，多个NBL串成一个单向链表，所以接收路径上要遍历到每一个NBL。
+所以，在接收路径上最麻烦的就是对这个NBL链表的处理，包含多个循环。具体可以参考代码。 &lt;/p&gt;
+&lt;h3 id="05c182ff2d1c37b5349352fe6c85a8f9"&gt;2 关于FilterSendNetBufferListsComplete中的bug&lt;/h3&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;上面说到，在接收路径上回一次接收到多个NBL，同理，在
+FilterSendNetBufferListsComplete函数中，下层的miniport同样可以一次通知多个NBL的发送完成，但是，在函数的参数中没有这个NBL链表的长度，这也就是我上面提到的那个bug，这个bug也纠结了很久，因为是偶发性的，不是每一次都会一次性通知多个NBL的发送完成。解决方法就是自己遍历每一个NBL，判断是中间层发送的还是上层发下来的。 &lt;/p&gt;
+&lt;h4 id="aa03d3ebe83d0fb381ff7e5b58de2d70"&gt;关于代码：&lt;/h4&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;代码是在wdk filter基础上改的，win7 32位测试成功，参考了网上的代码，代码中的一些业务相关的代码被我去掉了，但是在去掉之后，也没有做进一步的测试，所以不保证代码的完整性。但问题应该也不大。 &lt;/p&gt;
+&lt;p&gt;链接：&lt;a href="http://pan.baidu.com/s/1jGC4zdG"&gt;http://pan.baidu.com/s/1jGC4zdG&lt;/a&gt; 密码：dee2&lt;/p&gt;</description><dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">flanker</dc:creator><pubDate>Tue, 01 Apr 2014 11:06:36 +0800</pubDate><guid>tag:flankersky.com,2014-04-01:windows/win7filter.html</guid><category>win7</category><category>filter</category></item><item><title>在passthru的基础上实现转发</title><link>http://flankersky.com/windows/passthru.html</link><description>&lt;p&gt;&amp;emsp;&amp;emsp;俗话说，万事开头难。这几天真是深深的体会到了。搞个NDIS的转发都快把头发整白了。当初以为有了linux内核的那点基础，多少能好搞一点。现在才发现，windows真是“博大精深”啊。另外，关于windows与linux，开源与闭源，个人觉得，没必要用“道德”绑架一个人或是一个公司或是一个产品，产品好不好，体验说了算，与什么开源精神毫无关系。所以，不要整天用着盗版的windows还说什么MS无耻，linux伟大之类的，做人要厚道。&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;关于在NDIS层做NAT转发，主要是参考了《寒江独钓》这本书，还有以下的一些文章，
+在此表示感谢。
+&lt;a href="http://www.xfocus.net/articles/200606/870.html"&gt;http://www.xfocus.net/articles/200606/870.html&lt;/a&gt;
+&lt;a href="http://bbs3.driverdevelop.com/read.php?tid-69927.html"&gt;http://bbs3.driverdevelop.com/read.php?tid-69927.html&lt;/a&gt;&lt;/p&gt;
+&lt;p&gt;现将代码公布出来，
+Passthru 转发代码：
+&lt;a href="http://pan.baidu.com/s/1EgrWa"&gt;http://pan.baidu.com/s/1EgrWa&lt;/a&gt; 密码： l5cv&lt;/p&gt;
+&lt;p&gt;设置网卡混杂模式代码（deviceiocontrol尝试未成功）：
+&lt;a href="http://pan.baidu.com/s/1dDBYtA5"&gt;http://pan.baidu.com/s/1dDBYtA5&lt;/a&gt; 密码： o2fc&lt;/p&gt;
+&lt;p&gt;关于设置混杂模式，也有人说可以在MPSetInformation 添加如下代码&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;if (OID_GEN_CURRENT_PACKET_FILTER == Oid){
+
+RtlCopyMemory(&amp;amp;amp;aMode,InformationBuffer,sizeof(ULONG));
+
+aMode |= NDIS_PACKET_TYPE_PROMISCUOUS;
+
+RtlCopyMemory(InformationBuffer,&amp;amp;amp;aMode,sizeof(ULONG));
+DbgPrint(&amp;quot;here\r\n&amp;quot;);
+}
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;&amp;emsp;&amp;emsp;实测确实可行，因为每次在加载passthru的时候，驱动都会收到上层的set 请求。是谁发起的就不得而知了。&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;代码只是实现了纯粹的转发，不是很复杂，只是希望能对刚入门的小伙伴一点帮助。
+代码是在NDIS 5.1(windows xp sp3)上测试通过的。只是进行了短时间的测试，不保证完全没有错误。
+&amp;emsp;&amp;emsp;最后，关于这其中存在的一个问题，希望知道的朋友能给点提示。如下：
+在开启windbg双机调试的时候，（在虚拟机中转发）会出现数据包环回的情况，非调试态则是正常的。当初以为是虚拟机网卡桥接的原因，后来改成host-only并配合其它工具测试，结果也是一样。实在是不知道为什么，望高人指点&lt;/p&gt;</description><dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">flanker</dc:creator><pubDate>Tue, 01 Apr 2014 11:05:57 +0800</pubDate><guid>tag:flankersky.com,2014-04-01:windows/passthru.html</guid><category>windows</category><category>passthru</category></item><item><title>nginx中的upstream相关(3)：向下游转发数据</title><link>http://flankersky.com/nginx/nginx03.html</link><description>&lt;p&gt;觉得可以总览一下整个upstream的过程了。简单画了个图。如下&lt;/p&gt;
+&lt;p&gt;&lt;img alt="" src="http://img15.poco.cn/mypoco/myphoto/20140331/11/1746743632014033111360973THX.jpg" /&gt;&lt;/p&gt;
+&lt;p&gt;上图大体分为三个部分，upstream的初始化，upstream的数据接收，upstream的数据回传。
+由于nginx是异步化的结构，所以三个部分之间就是靠事件触发联系起来的。
+前两个部分，前面两篇文章分别介绍过了，下面看看第三部分。Upstream的数据回传&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;static void
+ngx_http_upstream_process_non_buffered_request(ngx_http_request_t *r,
+ngx_uint_t do_write)
+{
+
+u = r-&amp;gt;upstream;
+downstream = r-&amp;gt;connection;
+upstream = u-&amp;gt;peer.connection;
+
+b = &amp;amp;u-&amp;gt;buffer;
+/*u-&amp;gt;length要发送的数据的长度，一般是在收到响应头的时候对其赋值为content-length，当然，trunk编码的时候要区别对待。
+每发送一些数据，u-&amp;gt;length就会相应的做减法，代表还有多长的数据需要发送。如果是0，就代表全部发送完了
+do_write：是否立即发送的意思。
+ */
+do_write = do_write || u-&amp;gt;length == 0;
+
+for ( ;; ) {
+
+    if (do_write) {
+/*out_buf代表本次将要发送的数据，input_filter会将数据挂载到out_buf。
+busy_bufs “忙”的意思，就是说，调用ngx_http_output_filter之后，out_bufs不一定会被立即释放，因为数据并不一定真正的发送出去(nginx是异步的)，所以调用ngx_chain_update_chains将out_buf挂载到busy_bufs，当busy_bufs真正为空的时候，才代表数据真正的发送完毕
+ */
+        if (u-&amp;gt;out_bufs || u-&amp;gt;busy_bufs) {
+
+            /*包体发送，会逐层经过包体过滤模块*/
+            rc = ngx_http_output_filter(r, u-&amp;gt;out_bufs);
+
+            if (rc == NGX_ERROR) {
+                ngx_http_upstream_finalize_request(r, u, 0);
+                return;
+            }
+
+            ngx_chain_update_chains(r-&amp;gt;pool, &amp;amp;u-&amp;gt;free_bufs, &amp;amp;u-&amp;gt;busy_bufs,
+                                    &amp;amp;u-&amp;gt;out_bufs, u-&amp;gt;output.tag);
+        }
+        /*上面说过了*/
+        if (u-&amp;gt;busy_bufs == NULL) {
+                /*也说过了*/
+            if (u-&amp;gt;length == 0
+                /*从网上看来的，eof代表对端结束了会话，发送了fin*/
+                || upstream-&amp;gt;read-&amp;gt;eof
+                || upstream-&amp;gt;read-&amp;gt;error)
+            {
+                /*结束本次upstream请求*/
+                ngx_http_upstream_finalize_request(r, u, 0);
+                return;
+            }
+
+            b-&amp;gt;pos = b-&amp;gt;start;
+            b-&amp;gt;last = b-&amp;gt;start;
+        }
+    }
+           size = b-&amp;gt;end - b-&amp;gt;last;
+
+    if (size &amp;amp;&amp;amp; upstream-&amp;gt;read-&amp;gt;ready) {
+
+        n = upstream-&amp;gt;recv(upstream, b-&amp;gt;last, size);
+
+        if (n == NGX_AGAIN) {
+            break;
+        }
+
+        if (n &amp;gt; 0) {
+            u-&amp;gt;state-&amp;gt;response_length += n;
+/*包体过滤*/
+            if (u-&amp;gt;input_filter(u-&amp;gt;input_filter_ctx, n) == NGX_ERROR) {
+                ngx_http_upstream_finalize_request(r, u, 0);
+                return;
+            }
+        }
+/*立即发送*/
+        do_write = 1;
+
+        continue;
+    }
+
+    break;
+}
+
+.....
+}
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;&amp;emsp;&amp;emsp;还有什么可说的？自己比较关心的那个ngx_http_upstream_finalize_request，但是打算放在长连接的时候讲。那剩下的可能就没什么好讲了。那就简单说说过滤模块吧。&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;过滤模块从执行流程上不麻烦，很简单的逻辑。书中也有介绍。
+从auto/options脚本下的选项看，nginx的默认包含了几个必须的过滤模块，有一些是可以通过without-xxxx去掉的。有一些是没有选项，也就是没法去掉的。到底包含了哪几个过滤模块，可以再ngx_modules.c的数组里查看，要从下往上看，ngx_http_write_filter_module是最后一个模块.只简单说下两个模块的功能吧.&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;ngx_http_header_filter_module 它的过滤函数是ngx_http_header_filter.代码就不贴了,代码虽然很长,但是功能很明显,就是申请发送的缓存,然后根据headers_out对其赋值，然后发送。只不过它考虑的情况比较复杂，当然这样更严谨。&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;ngx_http_write_filter_module是最后一个过滤模块，所以其必须是真正的发送的模块。不论，包头还是包体的发送，最终都是通过它发送的。
+好像没什么说的了，当然，过滤模块也是nginx中很复杂的一部分，以后要是涉及到复杂的过滤模块的开发的时候，会再详细研究一下。&lt;/p&gt;</description><dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">flanker</dc:creator><pubDate>Tue, 01 Apr 2014 10:57:37 +0800</pubDate><guid>tag:flankersky.com,2014-04-01:nginx/nginx03.html</guid><category>nginx</category></item><item><title>尝试移植ROS的协议栈到Windows XP SP3</title><link>http://flankersky.com/windows/ndisprot.html</link><description>&lt;p&gt;&amp;emsp;&amp;emsp;尝试进行此项移植的目的，只是为了检验这种移植的可能性，毕竟windows是一个闭源的操作系统。而且，查阅了网上的很多资料，也有人讨论此问题，但大都只是从原理上来讲讲，比如，有篇北邮的硕士论文《Windows下的TCP协议栈开发》，说的很详细，但说的基本上就是协议栈与上层(TDI)、下层(NIC/NDIS)间的这些必须要实现的接口，这些其实在《windows内核情景分析（下）》中讲的很详细了。不过这篇文章在当时(2007)年来说应该是比较不错的资料，因为《windows内核情景分析》是在2009年才出的。所以，网上关于windows协议栈移植的文章基本都是理论，当然也有人说移植成功过，虽然说没有放出源码，但对我心里上还是个不小的鼓励，至少证明是可以移植成功的。&lt;/p&gt;
+&lt;p&gt;完整的工程代码：&lt;a href="https://github.com/flankersky/WinStack"&gt;https://github.com/flankersky/WinStack&lt;/a&gt;
+百度云：&lt;a href="http://pan.baidu.com/s/1pJ2kCh9"&gt;http://pan.baidu.com/s/1pJ2kCh9&lt;/a&gt; 密码：2fdi&lt;/p&gt;
+&lt;p&gt;说明：&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;到目前为止，代码只是能编译通过，且能加载成功，而且创建内核设备对象成功，至少证明了windows上的协议栈是可以被替换掉的。但是对于安装时的问题(没有inf文件，不会写)、卸载时的BSOD等问题，本人到目前至少是无能为力。只能算是给想移植协议栈到windows的朋友们开了一个头而已，当然，如果本人以后完全移植成功了，肯定会来拍死这些Bugs的。&lt;/p&gt;
+&lt;p&gt;实验环境：
+主机：win7 x64
+编译环境：WDK-7600.***
+测试环境：XP SP3 In vmware&lt;/p&gt;
+&lt;h2 id="27e8f83a772621b9229d917d14a8d9ec"&gt;1、卸载windows xp sp3上的协议栈&lt;/h2&gt;
+&lt;p&gt;参考： &lt;a href="http://www.techrepublic.com/forums/questions/how-to-uninstall-tcp-ip-in-win-xp/"&gt;http://www.techrepublic.com/forums/questions/how-to-uninstall-tcp-ip-in-win-xp/&lt;/a&gt;
+懒人就不给大家翻译了：&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;11. Locate the Nettcpip.Inf file in %winroot%\inf, and then open the file in Notepad.
+12. Locate the [MS_TCPIP.PrimaryInstall] section.
+13. Edit the Characteristics = 0xa0 entry and replace 0xa0 with 0x80.
+14. Save the file, and then exit Notepad.
+15. In Control Panel, double-click Network Connections, right-click Local Area Connection, and then select Properties.
+16. On the General tab, click Install, select Protocol, and then click Add.
+17. In the Select Network Protocols window, click Have Disk.
+18. In the Copy manufacturer&amp;#39;s files from: text box, type c:\windows\inf, and then click OK.
+19. Select Internet Protocol (TCP/IP), and then click OK.Note This step will return you to the Local Area Connection Properties screen, but now the UninstallButton is available.
+20. Select Internet Protocol (TCP/IP), click Uninstall, and then click Yes.
+RESTART
+Succesfull uninstallation of TCP/IP will remove numerous keys from the registry including
+HKLM/system/CurrentControlSet/services/tcpip
+HKLM/system/CurrentControlSet/services/dhcp
+HKLM/system/CurrentControlSet/services/dnscache
+HKLM/system/CurrentControlSet/services/ipsec
+HKLM/system/CurrentControlSet/services/policyagent
+HKLM/system/CurrentControlSet/services/atmarpc
+HKLM/system/CurrentControlSet/services/nlaThese represent various interconnected and interdependant services.
+
+For good measure you should delete the following keys before reinstalling TCP/IP in step #2
+HKLM/system/CurrentControlSet/services/winsock
+HKLM/system/CurrentControlSet/services/winsock2
+
+Step #2
+Reinstall of TCP/IP
+———————————————————————-
+Following the above substep #13, replace the 0×80 back to 0xa0, this will eliminate the related”unsigned driver” error that was encountered during the uninstallation phase.
+
+Return to “local area connection”&amp;gt; properties &amp;gt; general tab &amp;gt; install &amp;gt; Protocol &amp;gt; TCP/IP
+
+You may receive an “Extended Error” failure upon trying to reinstall the TCP/IP, this is related to theInstaller sub-system conflicting with the security database status.
+To check the integrity of the security database
+Esentutl /g c:\windows\security\Database\secedit.Sdb
+There may be a message saying database is out of date
+
+First try the recovery option
+Esentutl /r c:\windows\security\Database\secedit.Sdb
+
+This did not work for me, I needed the repair option
+Esentutl /p c:\windows\security\Database\secedit.Sdb
+
+Rerun the /g option to ensure that integrity is good and database is up to date.
+Now return to the “local area network setup”
+Choose install &amp;gt; protocol &amp;gt; tcp/ip and try again
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;h2 id="d9ebf3d304c272f3e25a481ac74e1a97"&gt;2、编译&lt;/h2&gt;
+&lt;p&gt;从ReactOS中把协议栈的东西都抠出来，然后组织一下目录结构。就开始编译。&lt;/p&gt;
+&lt;p&gt;首先编译lwip。(lwip是作为tcp部分)&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;cd lwip\src\api; build -c
+cd lwip\src\core\ipv4; build -c
+cd lwip\src\core\snmp; build -c
+cd lwip\src\core; build -c
+cd lwip\src; build -c
+
+cd #代码根目录#; build -c //编译的时候遇到了几个error，然后就是一下头文件的东西。
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;其中有一个纠结了挺长时间的错误&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;ntoskrnl.lib(ntoskrnl.exe) : error LNK2005: _KeInitializeSpinLock@4 already defined in ****
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;在&lt;a href="http://bbs3.driverdevelop.com/read.php?tid=111048"&gt;http://bbs3.driverdevelop.com/read.php?tid=111048&lt;/a&gt;发现了这个问题，
+在&lt;a href="http://blog.csdn.net/iiprogram/article/details/1495713"&gt;http://blog.csdn.net/iiprogram/article/details/1495713&lt;/a&gt;发现了答案，&lt;/p&gt;
+&lt;p&gt;大致内容如下:&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;WIN9X_COMPAT_SPINLOCK
+You can define this compile flag in order to disable another “optimization”, which was first introduced in the Windows 2003 DDK (i.e. DDK build number 3790+).
+If you define the WIN9X_COMPAT_SPINLOCK compile flag, which I recommend, the function KeInitializeSpinLock() is an actual library function. Otherwise, i.e. if you do not define WIN9X_COMPAT_SPINLOCK, KeInitializeSpinLock() is implemented as an inline function that is incompatible with Windows 9x/Me.
+Thus, if your driver binary file must be used on all Windows platforms including Windows 9x/Me, you should define the WIN9X_COMPAT_SPINLOCK compile flag.
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;&amp;emsp;&amp;emsp;这篇blog中的其他东西也很有用。。。&lt;/p&gt;
+&lt;h2 id="160856cb88bcb5ee4e1cd1f9ad27a77f"&gt;3、测试&lt;/h2&gt;
+&lt;p&gt;本人实在是不会写inf文件，于是在网上搜罗了一下。在
+http://asp.renpeicheng.com/html/2006-03/232.html 发现了一个inf文件。改了一下，可以安装成功。但是。。。“本地连接”的“属性”有时都打不开。用DriverMonitor、driverstudio也可以安装（安装之后要重启，虽然它不提示需要重启）。&lt;/p&gt;
+&lt;p&gt;然后，查看了一下内核里的设备对象（如下图）。可以看到tcp udp等，说明确实加载进去了。
+&lt;img alt="" src="http://img15.poco.cn/mypoco/myphoto/20140331/11/1746743632014033111592522THX.jpg" /&gt;
+在windbg里也可以看到驱动打印出的log，驱动对象接收到了上层的IRP请求。
+&lt;img alt="" src="http://www.flankersky.com/wp-content/uploads/2222.jpg" /&gt;
+总结：&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;虽然，只是简单的将ROS的代码拿过来编译，但至少证明了这种移植的可能性，协议栈与上下层之间的接口至少是没有问题的。对于其他的bug，由于是刚刚入门，且时间紧张，暂时无能为力。如果以后继续研究的话，都会尽量去修复的。也希望，如果有高人看到这篇文章，能给本人一些指点，不胜感激。&lt;/p&gt;</description><dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">flanker</dc:creator><pubDate>Tue, 01 Apr 2014 10:57:04 +0800</pubDate><guid>tag:flankersky.com,2014-04-01:windows/ndisprot.html</guid><category>windows</category><category>ndis</category></item><item><title>windbg双击调试环境搭建</title><link>http://flankersky.com/windows/windbg.html</link><description>&lt;h2 id="87a80f14fcdb1c899df026075354ae14"&gt;1 vmware的设置如下：&lt;/h2&gt;
+&lt;p&gt;&lt;img alt="" src="http://www.flankersky.com/wp-content/uploads/wwww.jpg" /&gt;&lt;/p&gt;
+&lt;h2 id="414b872e0ce41d20e04e7592d6af6f98"&gt;2 虚拟机系统的boot.ini&lt;/h2&gt;
+&lt;p&gt;末尾添加：multi(0)disk(0)rdisk(0)partition(1)\WINDOWS=”Microsoft Windows XP Professional Debug” /fastdetect /debugport=COM2 /baudrate=115200&lt;/p&gt;
+&lt;h2 id="31c40103d462bb201fe8924a8a894fe6"&gt;3 windbg的快捷方式的属性中设置参数&lt;/h2&gt;
+&lt;p&gt;-b -k com:port=\.\pipe\com_1,baud=115200,pipe&lt;/p&gt;</description><dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">flanker</dc:creator><pubDate>Tue, 01 Apr 2014 10:56:54 +0800</pubDate><guid>tag:flankersky.com,2014-04-01:windows/windbg.html</guid><category>windows</category></item><item><title>nginx中的upstream相关(2)：上游响应的接收</title><link>http://flankersky.com/nginx/nginx02.html</link><description>&lt;p&gt;上回说道upstream向上游发送的过程，下面说一下upstream对上游响应的接收过程。
+Ps:上回好像忘了说明文中用到的nginx版本了。声明一下，文中的代码版本是nginx-1.4.4&lt;/p&gt;
+&lt;p&gt;在连接upstream的函数里ngx_http_upstream_connect（）设置了读事件的回调函数&lt;/p&gt;
+&lt;p&gt;u-&amp;gt;read_event_handler = ngx_http_upstream_process_header;
+所以，upstream的数据的接收肯定是从这个函数开始，有图才有真相&lt;/p&gt;
+&lt;p&gt;&lt;img alt="" src="http://img15.poco.cn/mypoco/myphoto/20140331/11/174674363201403311134118THX.jpg" /&gt;&lt;/p&gt;
+&lt;p&gt;再接着具体分析下每个函数：&lt;/p&gt;
+&lt;h2 id="c4ca4238a0b923820dcc509a6f75849b"&gt;1&lt;/h2&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;static void
+ngx_http_upstream_process_header(ngx_http_request_t *r, ngx_http_upstream_t *u)
+{
+
+/*
+ *判断读事件是否超时
+ */
+
+if (c-&amp;gt;read-&amp;gt;timedout) {
+    ngx_http_upstream_next(r, u, NGX_HTTP_UPSTREAM_FT_TIMEOUT);
+    return;
+}
+
+/*
+ *buffer是接收缓存，如果是空，就从内存池中分配
+ */
+
+if (u-&amp;gt;buffer.start == NULL) {
+    u-&amp;gt;buffer.start = ngx_palloc(r-&amp;gt;pool, u-&amp;gt;conf-&amp;gt;buffer_size);
+    if (u-&amp;gt;buffer.start == NULL) {
+        ngx_http_upstream_finalize_request(r, u,
+                 NGX_HTTP_INTERNAL_SERVER_ERROR);
+        return;
+    }
+/*
+ *初始化缓存区，
+ *pos是当前位置，数据从pos开始存储。
+ *Start end 分别是整个缓冲区的开始 结束，初始化之后就不变了
+ *Last是数据区的结尾。
+ */
+    u-&amp;gt;buffer.pos = u-&amp;gt;buffer.start;
+    u-&amp;gt;buffer.last = u-&amp;gt;buffer.start;
+    u-&amp;gt;buffer.end = u-&amp;gt;buffer.start + u-&amp;gt;conf-&amp;gt;buffer_size;
+    u-&amp;gt;buffer.temporary = 1;
+
+    u-&amp;gt;buffer.tag = u-&amp;gt;output.tag;
+....
+}
+
+for ( ;; ) {
+/*
+ *接收数据
+ */         
+    n = c-&amp;gt;recv(c, u-&amp;gt;buffer.last, u-&amp;gt;buffer.end - u-&amp;gt;buffer.last);
+
+
+....
+    u-&amp;gt;buffer.last += n;
+....
+
+/*
+ *调用自定义的头部处理函数
+ */
+    rc = u-&amp;gt;process_header(r);
+
+    if (rc == NGX_AGAIN) {
+ /*
+  *缓冲区满了
+  */
+        if (u-&amp;gt;buffer.last == u-&amp;gt;buffer.end) {
+            ngx_log_error(NGX_LOG_ERR, c-&amp;gt;log, 0,
+                          &amp;quot;upstream sent too big header&amp;quot;);
+
+            ngx_http_upstream_next(r, u,
+                                   NGX_HTTP_UPSTREAM_FT_INVALID_HEADER);
+            return;
+        }
+
+        continue;
+    }
+
+    break;
+}
+
+//rc == NGX_OK
+
+if (u-&amp;gt;headers_in.status_n &amp;gt; NGX_HTTP_SPECIAL_RESPONSE) {
+
+    if (r-&amp;gt;subrequest_in_memory) {
+        u-&amp;gt;buffer.last = u-&amp;gt;buffer.pos;
+    }
+
+    if (ngx_http_upstream_test_next(r, u) == NGX_OK) {
+        return;
+    }
+
+    if (ngx_http_upstream_intercept_errors(r, u) == NGX_OK) {
+        return;
+    }
+}
+ /*
+  *nginx提供的头部处理函数，初始化r-&amp;gt;headers_out,后面会分析
+  */
+
+if (ngx_http_upstream_process_headers(r, u) != NGX_OK) {
+    return;
+}
+
+/*
+  *subrequest_in_memory默认为0,以固定缓存向下游转发会进入下面的函数
+  */
+if (!r-&amp;gt;subrequest_in_memory) {
+/*向client发送响应*/
+    ngx_http_upstream_send_response(r, u);
+    return;
+}
+
+/*下面是子请求的相关处理，暂时不看*/
+/* subrequest content in memory */
+....
+}
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;h2 id="38b56af2136744f9031780a960940d42"&gt;2 再分别说下上面提到的几个函数&lt;/h2&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;U-&amp;gt;process_header,书中有例子，其实是参照proxy模块写的。&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;static ngx_int_t my_process_status_line(ngx_http_request_t *r)
+{
+ctx = ngx_http_get_module_ctx(r, ngx_http_my_proxy_module);
+　　u = r-&amp;gt;upstream;
+/*
+ *处理返回的状态行，就是返回的头部的第一行，像是 HTTP/1.1 200 OK之类
+ */
+rc = ngx_http_parse_status_line(r, &amp;amp;u-&amp;gt;buffer, &amp;amp;ctx-&amp;gt;status);
+
+.....
+
+/*
+ *设置状态码
+ */
+if (u-&amp;gt;state) {
+    u-&amp;gt;state-&amp;gt;status = ctx-&amp;gt;status.code;
+}
+
+u-&amp;gt;headers_in.status_n = ctx-&amp;gt;status.code;
+
+len = ctx-&amp;gt;status.end - ctx-&amp;gt;status.start;
+
+u-&amp;gt;headers_in.status_line.len = len;
+
+u-&amp;gt;headers_in.status_line.data = ngx_pnalloc(r-&amp;gt;pool, len);
+if (u-&amp;gt;headers_in.status_line.data == NULL) {
+    return NGX_ERROR;
+}
+
+ngx_memcpy(u-&amp;gt;headers_in.status_line.data, ctx-&amp;gt;status.start, len);
+
+......
+
+u-&amp;gt;process_header = my_proxy_process_header;
+
+
+/*
+ *处理包头的剩余部分
+ */
+return my_proxy_process_header(r);
+}
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;h2 id="eccbc87e4b5ce2fe28308fd9f2a7baf3"&gt;3&lt;/h2&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;static ngx_int_t
+my_proxy_process_header(ngx_http_request_t *r)
+{
+
+....
+
+/*一行一行的解析接收到的包头*/
+for ( ;; ) {
+
+/*
+ *所有从上游发回来的数据时存在buffer里的
+ */
+    rc = ngx_http_parse_header_line(r, &amp;amp;r-&amp;gt;upstream-&amp;gt;buffer, 1);
+
+    if (rc == NGX_OK) {
+/*
+ *从链表里取出一个元素
+ */ 
+        h = ngx_list_push(&amp;amp;r-&amp;gt;upstream-&amp;gt;headers_in.headers);
+        if (h == NULL) {
+            return NGX_ERROR;
+        }
+        /*
+         做hash有什么用？其实下面就能看到它的用处。
+         http的包头可以看成是简单的key:value结构，
+         Nginx的headers_in是个通用的结构，通过对接收到的key做哈希，然后与  自己支持的包头类型的哈希值比较，如果一样，就将对应的value赋值给  
+         headers_in中相应的结构，对headers_out的赋值也是如此。下面会看到     upstream有个专门的静态数组，提供对headers_in headers_out赋值的作用
+        */
+
+        h-&amp;gt;hash = r-&amp;gt;header_hash;
+
+        h-&amp;gt;key.len = r-&amp;gt;header_name_end - r-&amp;gt;header_name_start;
+        h-&amp;gt;value.len = r-&amp;gt;header_end - r-&amp;gt;header_start;
+　　      
+        /*不太明白为什么重新申请了内存，直接用buffer的内存，指针指过去不就行了，还能节省内存？？？不明白这样的意图。不过，后面的对headers_in/out中的字段的赋值，都是指针形式的。
+　　      */
+        h-&amp;gt;key.data = ngx_pnalloc(r-&amp;gt;pool,
+                           h-&amp;gt;key.len + 1 + h-&amp;gt;value.len + 1 + h-&amp;gt;key.len);
+        if (h-&amp;gt;key.data == NULL) {
+            return NGX_ERROR;
+        }
+
+        h-&amp;gt;value.data = h-&amp;gt;key.data + h-&amp;gt;key.len + 1;
+        h-&amp;gt;lowcase_key = h-&amp;gt;key.data + h-&amp;gt;key.len + 1 + h-&amp;gt;value.len +1;
+
+        ngx_memcpy(h-&amp;gt;key.data, r-&amp;gt;header_name_start, h-&amp;gt;key.len);
+        h-&amp;gt;key.data[h-&amp;gt;key.len] = &amp;#39;\0&amp;#39;;
+        ngx_memcpy(h-&amp;gt;value.data, r-&amp;gt;header_start, h-&amp;gt;value.len);
+        h-&amp;gt;value.data[h-&amp;gt;value.len] = &amp;#39;\0&amp;#39;;
+        /*统一用小写，才能做哈希啊。*/
+        if (h-&amp;gt;key.len == r-&amp;gt;lowcase_index) {
+            ngx_memcpy(h-&amp;gt;lowcase_key, r-&amp;gt;lowcase_header, h-&amp;gt;key.len);
+
+        } else {
+            ngx_strlow(h-&amp;gt;lowcase_key, h-&amp;gt;key.data, h-&amp;gt;key.len);
+        }
+
+        hh = ngx_hash_find(&amp;amp;umcf-&amp;gt;headers_in_hash, h-&amp;gt;hash,
+                           h-&amp;gt;lowcase_key, h-&amp;gt;key.len);
+        /*
+　   　   Hanler是对根据预先指定的规则，对headers_in的结构体初始化。
+　   　   还有 后面会出现的一个copy_headler，具体分析放在后面一块说。
+        */
+        if (hh &amp;amp;&amp;amp; hh-&amp;gt;handler(r, h, hh-&amp;gt;offset) != NGX_OK) {
+            return NGX_ERROR;
+        }
+
+    ......
+        continue;
+    }
+
+    if (rc == NGX_HTTP_PARSE_HEADER_DONE) {
+
+        /*整个头部处理完毕，下面处理一些特殊情况*/
+
+        if (r-&amp;gt;upstream-&amp;gt;headers_in.server == NULL) {
+            ....
+            /*如果返回中没有server头 。。。*/
+        }
+
+        if (r-&amp;gt;upstream-&amp;gt;headers_in.date == NULL) {
+            .....
+            /*如果没有date头 。。。*/
+        }
+
+        /* clear content length if response is chunked */
+
+        u = r-&amp;gt;upstream;
+        /*处理chunk编码，nginx有一个ngx_http_chunked_filter_module过滤模块，是专门处理chunk编码的*/
+        if (u-&amp;gt;headers_in.chunked) {
+            u-&amp;gt;headers_in.content_length_n = -1;
+        }
+
+        /*
+         * set u-&amp;gt;keepalive if response has no body; this allows to keep
+         * connections alive in case of r-&amp;gt;header_only or X-Accel-Redirect
+         */
+.......
+    }
+    /*没有处理完毕，还需要接收更多的头部，只有遇到两个连续的\r\n，说明头部结束*/
+    if (rc == NGX_AGAIN) {
+        return NGX_AGAIN;
+    }
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;......
+    }&lt;/p&gt;
+&lt;h2 id="a87ff679a2f3e71d9181a67b7542122c"&gt;4&lt;/h2&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;upstream接收到上游返回的数据后，先调用模块实现的 &lt;em&gt;process_hedaer&lt;/em&gt;，主要是进行一些解析header，初始化headers_in的工作，然后就调用 ngx_http_upstream_process_headers ，主要用于初始化headers_out。下面看详细内容&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;static ngx_int_t
+ngx_http_upstream_process_headers(ngx_http_request_t *r, ngx_http_upstream_t *u)
+{
+.....
+umcf = ngx_http_get_module_main_conf(r, ngx_http_upstream_module);
+
+/*这个东西没有看，偷懒了，因为要实现的功能不需要这个东西。。。。。*/
+if (u-&amp;gt;headers_in.x_accel_redirect
+    &amp;amp;&amp;amp; !(u-&amp;gt;conf-&amp;gt;ignore_headers &amp;amp; NGX_HTTP_UPSTREAM_IGN_XA_REDIRECT))
+{
+ ......
+}
+
+part = &amp;amp;u-&amp;gt;headers_in.headers.part;
+h = part-&amp;gt;elts;
+
+for (i = 0; /* void */; i++) {
+
+    if (i &amp;gt;= part-&amp;gt;nelts) {
+        if (part-&amp;gt;next == NULL) {
+            break;
+        }
+
+        part = part-&amp;gt;next;
+        h = part-&amp;gt;elts;
+        i = 0;
+    }
+/*这里又做了哈希。是什么功能？
+Nginx提供了一个功能，在配置文件里配置hide_headers 指定相应的http头部，就会在向下游返回包头时隐藏该项，即不对headers_out赋值
+*/
+    if (ngx_hash_find(&amp;amp;u-&amp;gt;conf-&amp;gt;hide_headers_hash, h[i].hash,
+                      h[i].lowcase_key, h[i].key.len))
+    {
+    /*不对headers_out赋值，继续下一行*/
+        continue;
+    }
+
+    hh = ngx_hash_find(&amp;amp;umcf-&amp;gt;headers_in_hash, h[i].hash,
+                       h[i].lowcase_key, h[i].key.len);
+
+    if (hh) {
+        /*好吧，这里看到了copy_handler。下面具体分析*/
+        if (hh-&amp;gt;copy_handler(r, &amp;amp;h[i], hh-&amp;gt;conf) != NGX_OK) {
+            ngx_http_upstream_finalize_request(r, u,
+                                           NGX_HTTP_INTERNAL_SERVER_ERROR);
+            return NGX_DONE;
+        }
+
+        continue;
+    }
+
+    if (ngx_http_upstream_copy_header_line(r, &amp;amp;h[i], 0) != NGX_OK) {
+        ngx_http_upstream_finalize_request(r, u,
+                                           NGX_HTTP_INTERNAL_SERVER_ERROR);
+        return NGX_DONE;
+    }
+}
+
+if (r-&amp;gt;headers_out.server &amp;amp;&amp;amp; r-&amp;gt;headers_out.server-&amp;gt;value.data == NULL)   
+{
+    r-&amp;gt;headers_out.server-&amp;gt;hash = 0;
+}
+
+if (r-&amp;gt;headers_out.date &amp;amp;&amp;amp; r-&amp;gt;headers_out.date-&amp;gt;value.data == NULL) {
+    r-&amp;gt;headers_out.date-&amp;gt;hash = 0;
+}
+
+r-&amp;gt;headers_out.status = u-&amp;gt;headers_in.status_n;
+r-&amp;gt;headers_out.status_line = u-&amp;gt;headers_in.status_line;
+
+r-&amp;gt;headers_out.content_length_n = u-&amp;gt;headers_in.content_length_n;
+
+u-&amp;gt;length = u-&amp;gt;headers_in.content_length_n;
+
+return NGX_OK;
+}
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;h2 id="e4da3b7fbbce2345d7772b0674a318d5"&gt;5&lt;/h2&gt;
+&lt;p&gt;在ngx_http_upstream.c中有一个数组，ngx_http_upstream_header_t ngx_http_upstream_headers_in[]；
+　　
+ngx_http_upstream_header_t结构体的定义如下。&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;typedef struct {
+/*通过name做hash*/
+ngx_str_t                        name;
+/*通过handler对headers_in赋值*/
+ngx_http_header_handler_pt       handler;
+/*offset conf都是便宜，下面具体例子会明白是什么意思了*/
+ngx_uint_t                       offset;
+/*通过copy_handler对headers_out赋值*/
+ngx_http_header_handler_pt       copy_handler;
+ngx_uint_t                       conf;
+/*这个redirect的用途不是很明确。。暂时还没有看到它的用法*/
+ngx_uint_t                       redirect;  
+} ngx_http_upstream_header_t;
+
+闲言碎语不要讲了，数组中很多成员，没法一一讲解，拿其中一个当栗子吧。其实，很多是重复的。一个明白了，其他就都明白了。
+拿这个当栗子吧：
+
+{ ngx_string(“Date”),
+ngx_http_upstream_process_header_line,
+offsetof(ngx_http_upstream_headers_in_t, date),
+ngx_http_upstream_copy_header_line,
+offsetof(ngx_http_headers_out_t, date), 0 }
+
+
+/*
+这是一个通用的handler方法，会看到很多成员用到了这个函数
+其实很显然，就是通过偏移取到相应字段的位置，对其赋值
+ */
+
+static ngx_int_t
+ngx_http_upstream_process_header_line(ngx_http_request_t *r, ngx_table_elt_t *h,ngx_uint_t offset)
+{
+ngx_table_elt_t  **ph;
+ph = (ngx_table_elt_t **) ((char *) &amp;amp;r-&amp;gt;upstream-&amp;gt;headers_in + offset);
+
+if (*ph == NULL) {
+    *ph = h;
+}
+
+return NGX_OK;
+}
+
+/*好吧，这个又是个通用的函数，很多成员都用了
+跟上边的那个差不多，不说了吧。
+*/
+
+static ngx_int_t
+ngx_http_upstream_copy_header_line(ngx_http_request_t *r, ngx_table_elt_t *h,ngx_uint_t offset)
+{
+ngx_table_elt_t  *ho, **ph;
+
+ho = ngx_list_push(&amp;amp;r-&amp;gt;headers_out.headers);
+if (ho == NULL) {
+    return NGX_ERROR;
+}
+
+ *ho = *h;
+
+if (offset) {
+    ph = (ngx_table_elt_t **) ((char *) &amp;amp;r-&amp;gt;headers_out + offset);
+    *ph = ho;
+}
+
+return NGX_OK;
+}
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;&amp;emsp;上面两个都是通用的处理方法，就是直接复制，不需要做特殊处理，可以看到还有一些成员需要特殊设置，比如有ignore rewrite等。其实，分不同情况的原因就是，nginx需要对一些头部做一些特殊处理，所以，可以根据自己的一些特殊需求对上述函数做一些修改。
+　　
+好了，接收的部分差不多了，下一次再说向客户端回传的部分，顺便说一下过滤模块的东西。大家，晚安！！！&lt;/p&gt;</description><dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">flanker</dc:creator><pubDate>Tue, 01 Apr 2014 10:56:27 +0800</pubDate><guid>tag:flankersky.com,2014-04-01:nginx/nginx02.html</guid><category>linux</category><category>kernel</category></item><item><title>nginx中的upstream相关(1)：upstream请求的发送</title><link>http://flankersky.com/nginx/nginx01.html</link><description>&lt;p&gt;&amp;emsp;&amp;emsp;关于nginx模块开发，必须要这本《深入理解Nginx模块开发与架构解析》，作者陶辉，
+作者博客 http://blog.csdn.net/russell_tao
+关于此书的勘误表 http://nginx.weebly.com/&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;关于nginx，自己也没有系统的学习，只是看了几天书，然后根据书中提到的例子，开始试图实现自己的需求，所以，没能从全局把握nginx的架构，只是针对开发中遇到的一些问题，相应的做一下分析。但关于nginx，以后还会慢慢写，希望能尽可能的覆盖nginx的大部分特性。&lt;/p&gt;
+&lt;p&gt;本期说一下nginx中，关于upstream。&lt;/p&gt;
+&lt;p&gt;关于upstream基础的东西，可以参考《深入理解Nginx》的第五章，书中还有一个简单的例子。提醒读者注意的一点是，书中的例子说用upstream的resolved成员设置后端地址的方法，&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;如果大家在今天仍想借鉴这种方法的话，可能会不是很适用。因为，书中的nginx的代码版本是1.0.4，是不支持upstream的长连接的。Upstream的长连接实在1.1.14之后才开始支持的。这一点会在讲长连接时具体分析。&lt;/p&gt;
+&lt;p&gt;Upstream的建立及初始化&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;初始化upstream之前必须要初始化几个回调函数，其中下面三个是必须要初始化的&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;ngx_int_t (*create_request)(ngx_http_request_t *r);
+ngx_int_t (*process_header)(ngx_http_request_t *r);
+void (*finalize_request)(ngx_http_request_t *r, ngx_int_t rc);
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;&amp;emsp;&amp;emsp;为什么必须初始化，后面会看到原因。然后就可以调用upstream的初始化函数了。大致流程如下图&lt;/p&gt;
+&lt;p&gt;&lt;img alt="" src="http://img15.poco.cn/mypoco/myphoto/20140330/21/1746743632014033021083062THX.jpg" /&gt;&lt;/p&gt;
+&lt;p&gt;之后就可以等待upstream的读事件了，用“等待”可能不合适，因为upstream是异步的。
+下面具体分析下每个函数的细节：&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;static void
+ngx_http_upstream_init_request(ngx_http_request_t *r)
+{
+
+
+#if (NGX_HTTP_CACHE)
+...
+/*关于cache的东西还没有看，暂时先不考虑了^-^*/
+...
+#endif
+
+...
+/*create_request就是模块必须实现的三个回调函数之一，作用是构建发往后端的请求
+　　这个函数，书中有实现及讲解，这里就不罗嗦了
+*/
+    if (u-&amp;gt;create_request(r) != NGX_OK) {
+        ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
+        return;
+    }
+
+
+
+　　/*这是向后端链接时，本地使用的地址，如果配置文件有设置的话，就取自己设置的        地址
+　　*/
+    u-&amp;gt;peer.local = ngx_http_upstream_get_local(r, u-&amp;gt;conf-&amp;gt;local);
+
+　　/*书中有说道可以用resolved设置后端地址*/
+    if (u-&amp;gt;resolved == NULL) {
+　　/*不然，就用upstream中配置的后端地址，
+　　实在配置文件的upstream块配置的
+　　*/
+        uscf = u-&amp;gt;conf-&amp;gt;upstream;
+
+　　} else {
+           /*如果resolved中的地址存在，直接连接，不然，下面还要进行DNS解析*/
+            if (u-&amp;gt;resolved-&amp;gt;sockaddr) {
+　　/*这里牵扯到upstream负载均衡的东西，暂时也没看，^_^*/
+            if (ngx_http_upstream_create_round_robin_peer(r, u-&amp;gt;resolved)
+                != NGX_OK)
+            {
+                ngx_http_upstream_finalize_request(r, u,
+                                               NGX_HTTP_INTERNAL_SERVER_ERROR);
+                return;
+            }
+　　/*开始连接后端server*/
+            ngx_http_upstream_connect(r, u);
+
+            return;
+        }
+
+　　...
+　　/*解析后端地址*/
+        ctx = ngx_resolve_start(clcf-&amp;gt;resolver, &amp;amp;temp);
+    ...
+        return;
+    }
+
+found:
+/*如果resolved没有设置后端server的地址，会跳到这里
+
+Uscf是什么？说长连接的时候，再细说这个东西
+*/
+if (uscf == NULL) {
+    ngx_log_error(NGX_LOG_ALERT, r-&amp;gt;connection-&amp;gt;log, 0,
+                  &amp;quot;no upstream configuration&amp;quot;);
+    ngx_http_upstream_finalize_request(r, u,
+                                       NGX_HTTP_INTERNAL_SERVER_ERROR);
+    return;
+}
+
+if (uscf-&amp;gt;peer.init(r, uscf) != NGX_OK) {
+    ngx_http_upstream_finalize_request(r, u,
+                                       NGX_HTTP_INTERNAL_SERVER_ERROR);
+    return;
+}
+/*
+ *  连接后端server
+ */
+ngx_http_upstream_connect(r, u);
+}
+
+static void
+ngx_http_upstream_connect(ngx_http_request_t *r, ngx_http_upstream_t *u)
+{
+    ngx_int_t          rc;
+
+
+　　/*连接后端server，就是最基本的建立tcp连接的过程
+　　建立socket，
+　　如果需要，bind本地地址
+　　设置套接字选项
+　　Connect后端server
+　　*/
+    rc = ngx_event_connect_peer(&amp;amp;u-&amp;gt;peer);
+
+　　/*设置读写事件的回调函数*/
+    c-&amp;gt;write-&amp;gt;handler = ngx_http_upstream_handler;
+    c-&amp;gt;read-&amp;gt;handler = ngx_http_upstream_handler;
+　　/*真正有读写事件时，实际起作用的是下面两个*/
+    u-&amp;gt;write_event_handler = ngx_http_upstream_send_request_handler;
+    u-&amp;gt;read_event_handler = ngx_http_upstream_process_header;
+
+　　/*request_body是client想nginx发来的请求*/
+    if (r-&amp;gt;request_body
+        &amp;amp;&amp;amp; r-&amp;gt;request_body-&amp;gt;buf
+        &amp;amp;&amp;amp; r-&amp;gt;request_body-&amp;gt;temp_file
+        &amp;amp;&amp;amp; r == r-&amp;gt;main)
+
+    /*
+     * the r-&amp;gt;request_body-&amp;gt;buf can be reused for one request only,
+     * the subrequests should allocate their own temporary bufs
+     */
+
+    u-&amp;gt;output.free = ngx_alloc_chain_link(r-&amp;gt;pool);
+    if (u-&amp;gt;output.free == NULL) {
+        ngx_http_upstream_finalize_request(r, u,
+                                           NGX_HTTP_INTERNAL_SERVER_ERROR);
+        return;
+    }
+
+    u-&amp;gt;output.free-&amp;gt;buf = r-&amp;gt;request_body-&amp;gt;buf;
+    u-&amp;gt;output.free-&amp;gt;next = NULL;
+    u-&amp;gt;output.allocated = 1;
+
+    r-&amp;gt;request_body-&amp;gt;buf-&amp;gt;pos = r-&amp;gt;request_body-&amp;gt;buf-&amp;gt;start;
+    r-&amp;gt;request_body-&amp;gt;buf-&amp;gt;last = r-&amp;gt;request_body-&amp;gt;buf-&amp;gt;start;
+    r-&amp;gt;request_body-&amp;gt;buf-&amp;gt;tag = u-&amp;gt;output.tag;
+}
+
+u-&amp;gt;request_sent = 0;
+
+
+    /*
+     * tcp握手没有成功，添加写事件超时，写事件的回调函数前面已经设置过了
+     */
+if (rc == NGX_AGAIN) {
+    ngx_add_timer(c-&amp;gt;write, u-&amp;gt;conf-&amp;gt;connect_timeout);
+    return;
+}
+
+/*向后端发送http的请求*/
+ngx_http_upstream_send_request(r, u);
+}
+
+static void
+ngx_http_upstream_send_request(ngx_http_request_t *r, ngx_http_upstream_t *u)
+{
+...
+/*发送http请求
+request_bufs 是在自定义的create_request里初始化的。
+*/
+    rc = ngx_output_chain(&amp;amp;u-&amp;gt;output, u-&amp;gt;request_sent ? NULL : u-&amp;gt;request_bufs);
+　　if (c-&amp;gt;write-&amp;gt;timer_set) {
+　　/*删除写事件超时*/
+        ngx_del_timer(c-&amp;gt;write);
+    }
+
+    ngx_add_timer(c-&amp;gt;read, u-&amp;gt;conf-&amp;gt;read_timeout);
+
+#if 1
+　　/*有可能会很快返回？*/
+　　if (c-&amp;gt;read-&amp;gt;ready) { 
+　　/*处理返回的数据*/        
+        ngx_http_upstream_process_header(r, u);
+        return;
+    }
+#endif
+　　u-&amp;gt;write_event_handler = ngx_http_upstream_dummy_handler;
+　　}
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;好了，白天看，晚上写，也没法写的很详细。今天，就到这吧&lt;/p&gt;</description><dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">flanker</dc:creator><pubDate>Tue, 01 Apr 2014 10:55:17 +0800</pubDate><guid>tag:flankersky.com,2014-04-01:nginx/nginx01.html</guid><category>nginx</category></item><item><title>packet socket进行抓包所引出问题的深层次挖掘</title><link>http://flankersky.com/linux/psocket.html</link><description>&lt;p&gt;【本文摘自本人CU论坛】http://blog.chinaunix.net/uid-28980859-id-3981011.html&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;前几天设备突然出现问题，害的我搞到凌晨3点多。当时虽然问题搞定，但对深层次的原因不是很清楚，所以写篇blog记录下，希望帮到遇到类似问题的朋友。&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;问题描述，系统中用的packet socket抓包，但是同样的包，发送的时候却失败了，按道理不应该的。查看日志，是大于1514(MTU 1500 + 以太头 14)的包发送失败了，现实错误时&amp;quot;message too long&amp;quot;。查看抓包的地方，居然抓到了大于1514的包，。其实，对于抓到大于MTU的包，这点我也很疑惑。&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;关于这个问题我想以两个问题的形式把问题及原因引出来.&lt;/p&gt;
+&lt;p&gt;问题1：&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;下面这段代码的，rcvbuf 跟 sendbuf 分贝设置设置多大合适？&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;sockfd = socket(AF_INET, SOCK_STREAM, 0);&amp;lt;br /&amp;gt;
+read = recv(sockfd ,rcvbuf,sizeof(rcvbuf), 0);&amp;lt;br /&amp;gt;
+write = send(sockfd ,sendbuf,sizeof(sendbuf), 0);&amp;lt;br /&amp;gt;
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;解答：&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;上面的代码是一个正常的tcp socket，两个buf的大小应该是没有大小限制，但是网上说有64k的限制，这一点我没有查阅相关资料，不敢确定。但是，至少有一点是确定的，可以接收或者发送送大于MTU的数据包。&lt;br /&gt;
+ps：MTU是链路层的概念，在tcp层是mss，但是为了这里讨论方便，将他俩视为&amp;quot;一个概念&amp;quot;，就是socket(packet 、raw socket)所能发送的最大字节数，二者的区别，可以去google.&lt;/p&gt;
+&lt;p&gt;问题2：&lt;br /&gt;&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;下面二者的区别？&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;raw_socket = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);&amp;lt;br /&amp;gt;
+packet_socket = socket(PF_PACKET, SOCK_RAW, IPPROTO_TCP);
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;解答：&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;第一个是基于AF_INET协议族的raw socket，第二个是基于PF_PACKET的raw socket，都可以用于抓包，但是二者抓包的位置不一样，方式1抓包是在tcp/ip协议层之上，方式2是在链路层抓到的包，所以造成的结果是方式1抓到的包是经过ip层的分片重组的，所以在没有网卡的一些特性的支持下(嘿嘿，下面会说到网卡的一些特性对抓包的 影响)，方式1抓到的其实是数据流，方式2抓到的是单个的数据包。所以用方式1抓包的话，接收buf的大小应该是任意的，但是这点没有验证过，理论上是这 样。现在用方式1抓包的少了，也懒得去验证了，下面见证奇葩，谈下一个问题。&lt;/p&gt;
+&lt;p&gt;问题3：&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;下面这段代码的，rcvbuf 跟 sendbuf 分贝设置设置多大合适？&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;read = recv(packet_socket,rcvbuf,sizeof(rcvbuf), 0);&amp;lt;br /&amp;gt;
+write = send(packet_socket ,sendbuf,sizeof(sendbuf), 0);&amp;lt;br /&amp;gt;
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;&amp;emsp;&amp;emsp;因为packet socket是在链路层抓包的，所以抓到的包不会经过协议栈，也就不会被分片重组，所以理论上在普通的以太环境中，rcvbuf的大小不能小于 1514(MTU + 14的链路层长度)，因为如果rcvbuf太小的话，比如rcvbuf大小是1400 ，接收到1500的一个包，多余的100字节会被丢弃掉，就会出问题。&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;但是，，，用packet socket确实抓到了大于MTU的包，如何解释？这跟在wireshark中抓包抓到大于MTU的包是一回事，linux wireshark 用的应该也是packet socket。&lt;/p&gt;
+&lt;p&gt;难道无解？？？NO!!!!且看下面分解。。&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;先看下关于网卡的一些特性，秘密就在这：&lt;/p&gt;
+&lt;p&gt;网卡TSO、UFO、GSO、LRO、GRO和RSS介绍,
+见链接： &lt;a href="http://coolhappy.blog.163.com/blog/static/19285610820121119112017797/"&gt;http://coolhappy.blog.163.com/blog/static/19285610820121119112017797/&lt;/a&gt;&lt;/p&gt;
+&lt;p&gt;这里只说TSO，GSO，GRO&lt;br /&gt;
+简单点说TSO是用于发送的时候对数据包进行分片的，如果协议栈检测到网卡支持TSO就不会再协议栈层分片，而将整个数据包发送到网卡，由网卡分片后发送出去。&lt;br /&gt;
+GSO跟TSO差不多，通用性好点。。&lt;br /&gt;
+GRO是用于对接收的数据包进行分片重组的，这样就免去了协议层对数据包进行重组，节省系统资源，提高效率。&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;所以，问题就出在这里，如果开启了GRO，但是没有开TSO的话，就会出现收到大包，却发送失败的问题。但是，单纯打开TSO，用PACKET SOCKET 发包还是会失败，要设置一个socket选项，这个选项的含义没有完全搞明白，内核源码里没有注释，希望知道的朋友不吝赐教。&lt;/p&gt;
+&lt;p&gt;相关的网卡设置的命令，及socket选项设置，&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;ethtool -K eth0 tso off/on&amp;lt;br /&amp;gt;
+ethtool -K eth0 gso off/on&amp;lt;br /&amp;gt;
+ethtool -K eth0 gro off/on
+
+int flag = 1;&amp;lt;br /&amp;gt;
+setsockopt(packet_socket,SOL_PACKET,PACKET_VNET_HDR,&amp;amp;amp;flag,sizeof(int));
+&lt;/pre&gt;&lt;/div&gt;</description><dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">flanker</dc:creator><pubDate>Tue, 01 Apr 2014 10:54:45 +0800</pubDate><guid>tag:flankersky.com,2014-04-01:linux/psocket.html</guid><category>linux</category><category>kernel</category></item><item><title>有关反向路径过滤</title><link>http://flankersky.com/linux/checksaddr.html</link><description>&lt;p&gt;&amp;emsp;&amp;emsp;反向路径过滤是linux中路由子系统里的概念。之所以写这个问题，还是因为之前碰到过一个内核里的函数fib_validate_source()，虽然改了里面的代码，但是当时没有看懂代码的意思，所以一直耿耿于怀。最近，静心读了一下《深入理解linux网络技术内幕》中关于邻居子系统、路由子系统的章节，这个问题算是得以解决。下面记录一下学习心得。
+内核代码版本依旧是3.2.6.&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;先说一下事情的起因，即为什么会出现这么奇葩的应用场景。这就要牵扯到一个概念“代理”
+代理分为好几种。普通代理，反向代理，透明代理，简单说下区别。具体的可以问google&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;普通代理，就是经常用的那种，在浏览器里设置之后，就可以实现一些“你懂得”的功能。&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;反向代理，传统的代理是代表客户来访问真正的server；反向代理则是代表真实的server来接受client的访问，通常是起到负载均衡、保护内网(屏障)的作用。&lt;/p&gt;
+&lt;h2 id="afb608bd15aec70fab1d80481b791de9"&gt;重点说下透明代理。&lt;/h2&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;透明代理，就是让用户“察觉不到”代理服务器的存在。比如，squid、nginx实现透明代理等。但是，也看到一个概念就是透明模式的防火墙与透明代理的防火墙。个人觉得，这是两个不同的概念，透明模式的防火墙类似于透明网桥(废话，网桥当然是透明的)，无IP，包过滤。这样可以隐藏防火墙的存在；但是实现透明代理的防火墙也是无IP的吗？没有找到相关的资料，不是很确定。但个人觉得只是实现了简单的透明代理，类似普通的透明代理服务器。但是，真正无IP的透明代理防护墙能不能实现？个人觉得也是可以的。&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;一般的透明代理服务器真的不会被用户察觉？非也。客户端虽然不需要再浏览器里设置，但是要设置默认网关为代理服务器的IP。如果想实现一个上面提到的无IP的透明代理防火墙呢。这才是真正的透明代理啊。毫无察觉啊。是不是很邪恶，很猥琐。哈哈&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;好吧，以上是代理的相关东西，跟本文题目有关系？我也不清楚，自己想吧。
+具体到代码上，如果我用混杂模式收到了一个数据包，怎么传到上层的应用？正常的协议栈肯定是不会让你上传的，不是开了混杂模式就可以传上去的。很多地方都会对数据包的合法性进行检查。比如，fib_validate_source()这就是其中之一。
+&amp;emsp;&amp;emsp;假设收到的数据包的源IP是192.168.1.100/24 目的是 202.202.202.202/24.我们收到之后，修改目的地址，传到我们自己机器的某一个网卡，比如地址是10.0.0.1/24.这显然不可能传上去的，即使修改了目的地址为本机地址。下面看具体代码：整个的接收流程。&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;/*
+ *  Main IP Receive routine.
+ */
+int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, struct net_device *orig_dev)
+{
+　　......
+     * that it receives, do not try to analyse it.
+     */
+　　/*这个pkt_type标志是在网卡驱动里写入的，意思是这不是发往本机的包，因为MAC地址不对，在ip_rcv能收到这种包，说明开了混杂模式*/
+    if (skb-&amp;gt;pkt_type == PACKET_OTHERHOST)
+        goto drop;
+　　.....
+　　/*netfilter的hook点，执行完netfilter就会执行 ip_rcv_finish*/
+    return NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING, skb, dev, NULL,
+               ip_rcv_finish);
+　　......
+}
+
+static int ip_rcv_finish(struct sk_buff *skb)
+{
+    const struct iphdr *iph = ip_hdr(skb);
+    struct rtable *rt;
+
+    /*
+     *  Initialise the virtual path cache for the packet. It describes
+     *  how the packet travels inside Linux networking.
+     */ /*检查skb中的dst_entry是否存在，dst_entry可以理解为是一个路由缓存项，书中 
+　　说的是路由表缓存中与协议无关的部分。一般接收的数据包中这项是不存在的，因为还
+　　没有到路由的阶段，只有在本机的回环数据包中这个路由缓存是存在的。*/
+    if (skb_dst(skb) == NULL) {
+　　/*查找路由，内核中一般在不开策略路由的情况下只有两个默认的路由表，分别是
+　　ip_fib_main_table,ip_fib_local_table。前者是用户可以修改的，即用户可以再
+　　用户态通过route add命令等修改。后者，是专门为发往本机的数据包建立的路由表。
+    如果查找失败，这个数据包就会被丢弃。
+　　*/    
+    int err = ip_route_input_noref(skb, iph-&amp;gt;daddr, iph-&amp;gt;saddr,
+                           iph-&amp;gt;tos, skb-&amp;gt;dev);
+    }
+
+    return dst_input(skb);
+　　.......
+}
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;接下来会调用此函数&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;int ip_route_input_common(struct sk_buff *skb, __be32 daddr, __be32 saddr,
+               u8 tos, struct net_device *dev, bool noref)
+{
+　　/*计算hash值，准备查找路由缓存*/
+    hash = rt_hash(daddr, saddr, iif, rt_genid(net));
+　　/*以下是具体的查找过程，可想而知，查找会失败。缓存查找失败，就会去查找路由    表   */
+    for (rth = rcu_dereference(rt_hash_table[hash].chain); rth;
+         rth = rcu_dereference(rth-&amp;gt;dst.rt_next)) {
+        if ((((__force u32)rth-&amp;gt;rt_key_dst ^ (__force u32)daddr) |
+             ((__force u32)rth-&amp;gt;rt_key_src ^ (__force u32)saddr) |
+             (rth-&amp;gt;rt_route_iif ^ iif) |
+             (rth-&amp;gt;rt_key_tos ^ tos)) == 0 &amp;amp;&amp;amp;
+            rth-&amp;gt;rt_mark == skb-&amp;gt;mark &amp;amp;&amp;amp;
+            net_eq(dev_net(rth-&amp;gt;dst.dev), net) &amp;amp;&amp;amp;
+            !rt_is_expired(rth)) {
+            ipv4_validate_peer(rth);
+            if (noref) {
+                dst_use_noref(&amp;amp;rth-&amp;gt;dst, jiffies);
+                skb_dst_set_noref(skb, &amp;amp;rth-&amp;gt;dst);
+            } else {
+                dst_use(&amp;amp;rth-&amp;gt;dst, jiffies);
+                skb_dst_set(skb, &amp;amp;rth-&amp;gt;dst);
+            }
+            RT_CACHE_STAT_INC(in_hit);
+            rcu_read_unlock();
+            return 0;
+        }
+        RT_CACHE_STAT_INC(in_hlist_search);
+    }
+
+skip_cache:
+    if (ipv4_is_multicast(daddr)) {
+　　.......
+    }
+　　/*查找路由表*/
+    res = ip_route_input_slow(skb, daddr, saddr, tos, dev);
+    rcu_read_unlock();
+    return res;
+}
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;查找路由表的函数&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
+                   u8 tos, struct net_device *dev)
+{
+　　......
+    /*
+     *  Now we are ready to route packet.
+     */
+　　/*fl4是struct flowi4 ；它事查找路由的关键字*/
+　　/*正式查找路由，查找会失败。然后会试图建立新的路由项*/
+    err = fib_lookup(net, &amp;amp;fl4, &amp;amp;res);
+    if (err != 0) {
+        if (!IN_DEV_FORWARD(in_dev))
+            goto e_hostunreach;
+        goto no_route;
+    }
+......
+
+　　/*要建立新的路由项，首先要确认数据包是发往本机的*/
+    if (res.type == RTN_LOCAL) {        /*然后要检查源路径的合法性，主要是为了检测IP欺骗等
+　　该函数中就会牵扯到反向路径过滤了。下面看一下这个函数
+　　*/
+        err = fib_validate_source(skb, saddr, daddr, tos,
+                      net-&amp;gt;loopback_dev-&amp;gt;ifindex,
+                      dev, &amp;amp;spec_dst, &amp;amp;itag);
+        if (err &amp;lt; 0)
+            goto martian_source_keep_err;
+        if (err)
+            flags |= RTCF_DIRECTSRC;
+        spec_dst = daddr;
+
+　　/*如果有效性检查成功，则就会新建路由缓存，刷新路由表等*/
+        goto local_input;
+    }
+
+......
+local_input:
+    rth = rt_dst_alloc(net-&amp;gt;loopback_dev,
+               IN_DEV_CONF_GET(in_dev, NOPOLICY), false);
+
+    hash = rt_hash(daddr, saddr, fl4.flowi4_iif, rt_genid(net));
+    rth = rt_intern_hash(hash, rth, skb, fl4.flowi4_iif);
+    err = 0;
+    if (IS_ERR(rth))
+        err = PTR_ERR(rth);
+    goto out;
+　　......
+}
+
+/* Given (packet source, input interface) and optional (dst, oif, tos):
+ * - (main) check, that source is valid i.e. not broadcast or our local
+ *   address.
+ * - figure out what &amp;quot;logical&amp;quot; interface this packet arrived
+ *   and calculate &amp;quot;specific destination&amp;quot; address.
+ * - check, that packet arrived from expected physical interface.
+ * called with rcu_read_lock()
+ */
+int fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst, u8 tos,
+            int oif, struct net_device *dev, __be32 *spec_dst,
+            u32 *itag)
+{
+　　.......
+　　/*什么叫反向路径过滤？
+　　书中的解释是：linux的默认行为认为非对称路由是可疑的，因为将根据路由表丢弃那
+　　些源IP地址通过接收接口为不可达的封包。
+　　通俗的解释下：
+　　如果接收的数据时A -&amp;gt; B ,如果我逆着回去，从B不能到A，那这个封包就会丢弃。
+　　非对称路由，就是指A -&amp;gt; B 与B -&amp;gt; A的路径可能不一样。
+
+　　*/
+    fl4.flowi4_oif = 0;
+    fl4.flowi4_iif = oif;
+    /*仔细看下面，源 目的地址反了？这就是”反向”的含义，要查外出的路由表。*/
+　　         fl4.daddr = src;
+        fl4.saddr = dst;
+    fl4.flowi4_tos = tos;
+    fl4.flowi4_scope = RT_SCOPE_UNIVERSE;
+
+　　......
+　　/**/
+    if (fib_lookup(net, &amp;amp;fl4, &amp;amp;res))
+        goto last_resort; //查找失败，返回
+
+　　.......
+
+}
+&lt;/pre&gt;&lt;/div&gt;</description><dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">flanker</dc:creator><pubDate>Tue, 01 Apr 2014 10:53:31 +0800</pubDate><guid>tag:flankersky.com,2014-04-01:linux/checksaddr.html</guid><category>linux</category><category>kernel</category></item><item><title>如何安全地调用netif_receive_skb</title><link>http://flankersky.com/linux/safenetif.html</link><description>&lt;p&gt;本文是探讨如何安全的调用netif_receive_skb，不是为了分析NAPI。&lt;/p&gt;
+&lt;p&gt;声明：本文用到的内核源码版本是linux-3.2.6,e1000e的驱动版本是e1000e-2.2.3.
+这里先做总结，因为代码分析部分有复杂，没看过这部分源码的可能会比较晕，其实我自己都很晕。&lt;/p&gt;
+&lt;h2 id="18b98b06aa3c9a21162b5f0db3e37d88"&gt;结论:&lt;/h2&gt;
+&lt;h3 id="88d0e7ff70b62460385e21ccf2f6d432"&gt;非NAPI方式的函数调用：&lt;/h3&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;e1000_intr-&amp;gt;e1000_clean_rx_irq-&amp;gt;e1000_receive_skb-&amp;gt;netif_rx-&amp;gt;enqueue_to_backlog-&amp;gt;____napi_schedule-&amp;gt;
+
+__raise_softirq_irqoff-&amp;gt;net_rx_action-&amp;gt;net_rx_action-&amp;gt;poll(默认的poll函数process_backlog)-&amp;gt;netif_receive_skb
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;说明：带下划线的部分与之前的代码没有直接调用关系，下划线部分是软中断里的代码，俗称“下半部/底半部”&lt;/p&gt;
+&lt;h3 id="a91401e7999e8ced66d4bef1144ca478"&gt;NAPI方式:&lt;/h3&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;e1000_intr-&amp;gt;__napi_schedule-&amp;gt;__raise_softirq_irqoff-&amp;gt;net_rx_action-&amp;gt;poll(一般是由驱动添加的poll函
+
+数)-&amp;gt;e1000_clean_rx_irq-&amp;gt;e1000_receive_skb-&amp;gt;netif_receive_skb
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;这篇文章不是为了讨论NAPI的，是为了前一片文章中的那个BUG，就是在内核空间没有任何保护的情况下调用netif_receive_skb导致的死锁问题，从上面的调用过程看，&lt;em&gt;netif_receive_skb&lt;/em&gt; 的调用都是在软中断上下文里调用的&lt;em&gt;，所以，我们自己调用的时候也要加一定的保护，比如，禁止软中断。调用 &lt;/em&gt;netif_rx&lt;em&gt; 就不会出现死锁，因为 &lt;/em&gt;netif_rx* 是去触发软中断的，所以不会存在于软中断上下文中。所以简单的调用netif_rx就可以解决问题了。目前测试情况看，没有载出现过问题。&lt;/p&gt;
+&lt;p&gt;下面就是详细的代码分析过程，目的就是为了总结出上面的那两个函数调用过程。这类文章网上也很多，但有时候跟自己的内核源码对不上，因为内核的代码是不断更新的。所以要根据自己的实际情况，自己动手分析。留着以后忘了也可以看。看的时候最好对照源码来看。。。&lt;/p&gt;
+&lt;p&gt;为了从下到上的说明数据包的接收流程，我们不得不从驱动层说起，拿e1000说事吧。&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;/**
+
+ * e1000_intr – Interrupt Handler
+
+ * @irq: interrupt number
+
+ * @data: pointer to a network interface device structure
+
+ **/
+
+/*中断处理函数*/
+
+static irqreturn_t e1000_intr(int __always_unused irq, void *data)
+
+{
+
+………………
+
+/*前面是一些检测的东西，不详细说了。下面的是重点。
+
+代码的接收分为NAPI方式与非NAPI方式。什么是NAPI，问问google。
+
+但是二者的代码流程，下面都会详细分析。
+
+先分析非NAPI方式
+
+*/
+
+#ifdef CONFIG_E1000E_NAPI
+
+
+
+      if (napi_schedule_prep(&amp;amp;adapter-&amp;gt;napi)) {
+
+            adapter-&amp;gt;total_tx_bytes = 0;
+
+            adapter-&amp;gt;total_tx_packets = 0;
+
+            adapter-&amp;gt;total_rx_bytes = 0;
+
+            adapter-&amp;gt;total_rx_packets = 0;
+
+            __napi_schedule(&amp;amp;adapter-&amp;gt;napi);
+
+      }
+
+#else
+
+/*非NAPI方式*/
+
+      adapter-&amp;gt;total_tx_bytes = 0;
+
+      adapter-&amp;gt;total_rx_bytes = 0;
+
+      adapter-&amp;gt;total_tx_packets = 0;
+
+      adapter-&amp;gt;total_rx_packets = 0;
+
+      for (i = 0; i &amp;lt; E1000_MAX_INTR; i++) {
+
+            /*clean_rx是在初始化时指定的，一般都是 e1000_clean_rx_irq()*/
+
+rx_cleaned = adapter-&amp;gt;clean_rx(adapter-&amp;gt;rx_ring);
+
+            tx_cleaned_complete = e1000_clean_tx_irq(adapter-&amp;gt;tx_ring);
+
+            if (!rx_cleaned &amp;amp;&amp;amp; tx_cleaned_complete)
+
+                  break;
+
+      }
+
+      if (likely(adapter-&amp;gt;itr_setting &amp;amp; 3))
+
+            e1000_set_itr(adapter);
+
+#endif /* CONFIG_E1000E_NAPI */
+
+      return IRQ_HANDLED;
+
+}
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;h3 id="50eab91c3f8ab2ce2b1c885c65755ceb"&gt;在非NAPI的情况下，调用过程如下：&lt;/h3&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;e1000_clean_rx_irq()-&amp;gt;e1000_receive_skb()-&amp;gt;netif_rx.
+
+netif_rx是一个老接口。
+
+在/net/core/dev.c
+
+int netif_rx(struct sk_buff *skb)
+
+{
+
+      int ret;
+
+
+
+      /* if netpoll wants it, pretend we never saw it */
+
+/*netpoll是用于让内核在网络和I/O子系统尚不能完整可用时,依然能   发送和接收数
+
+据包,主要用于网络控制台和远程。所以这里不考虑netpoll*/
+
+      if (netpoll_rx(skb))
+
+            return NET_RX_DROP;
+
+/*时间戳检查*/
+
+      if (netdev_tstamp_prequeue)
+
+            net_timestamp_check(skb);
+
+/*刚开始看这个函数有点蒙，找不到定义，简单查了点资料，是里怒下内核里的函数追
+
+ 踪点，调试用的。这里先不做讨论*/
+
+      trace_netif_rx(skb);
+
+#ifdef CONFIG_RPS
+
+      {
+
+/*关于RPS（google的一个patch，简单说，多核情况下对数据包接收的优化，负载均衡，以后再探讨）的代码，这里先不做讨论，暂且认为它是关闭的。*/
+
+      }
+
+#else
+
+      {
+
+            unsigned int qtail;
+
+/*这才是重点，看下面。。*/
+
+            ret = enqueue_to_backlog(skb, get_cpu(), &amp;amp;qtail);
+
+            put_cpu();
+
+      }
+
+#endif
+
+      return ret;
+
+}
+
+/*softnet_data的结构*/
+
+/*
+
+ * Incoming packets are placed on per-cpu queues
+
+ */
+
+struct softnet_data {
+
+      struct Qdisc          *output_queue;
+
+      struct Qdisc          **output_queue_tailp;
+
+      struct list_head    poll_list;
+
+      struct sk_buff       *completion_queue;
+
+      struct sk_buff_head   process_queue;
+
+
+
+      /* stats */
+
+      unsigned int         processed;
+
+      unsigned int         time_squeeze;
+
+      unsigned int         cpu_collision;
+
+      unsigned int         received_rps;
+
+
+
+#ifdef CONFIG_RPS
+
+      struct softnet_data    *rps_ipi_list;
+
+
+
+      /* Elements below can be accessed between CPUs for RPS */
+
+      struct call_single_data    csd ____cacheline_aligned_in_smp;
+
+      struct softnet_data    *rps_ipi_next;
+
+      unsigned int         cpu;
+
+      unsigned int         input_queue_head;
+
+      unsigned int         input_queue_tail;
+
+#endif
+
+      unsigned         dropped;
+
+      struct sk_buff_head   input_pkt_queue;
+
+      struct napi_struct backlog;
+
+};
+
+/*
+
+ * enqueue_to_backlog is called to queue an skb to a per CPU backlog
+
+ * queue (may be a remote CPU queue).
+
+ */
+
+/*将SKB链入softnet_data的input_pkt_queue，softnet_data是一个per-CPU结构，如上所示。*/
+
+static int enqueue_to_backlog(struct sk_buff *skb, int cpu,
+
+                        unsigned int *qtail)
+
+{   
+      struct softnet_data *sd;
+      unsigned long flags;  
+/*取得相应cpu里的softnet_data。*/
+
+      sd = &amp;amp;per_cpu(softnet_data, cpu);
+      local_irq_save(flags);
+      rps_lock(sd);
+
+/*检查接收队列是否已满，如果满了，则丢弃该数据包*/
+
+      if (skb_queue_len(&amp;amp;sd-&amp;gt;input_pkt_queue) &amp;lt;= netdev_max_backlog) {
+
+/*检查队列是否是0，只有是0才去触发软中断，因为如果不是0，说明在这之前已经触发了相应的软中断，没有必要重复触发。*/
+
+            if (skb_queue_len(&amp;amp;sd-&amp;gt;input_pkt_queue)) {
+
+enqueue:
+
+                  __skb_queue_tail(&amp;amp;sd-&amp;gt;input_pkt_queue, skb);
+
+                  input_queue_tail_incr_save(sd, qtail);
+
+                  rps_unlock(sd);
+
+                  local_irq_restore(flags);
+
+                  return NET_RX_SUCCESS;
+
+            }
+
+            /* Schedule NAPI for backlog device
+
+             * We can use non atomic operation since we own the queue lock
+
+             */
+
+            if (!__test_and_set_bit(NAPI_STATE_SCHED, &amp;amp;sd-&amp;gt;backlog.state)) {
+
+                  if (!rps_ipi_queued(sd))
+
+/*触发软中断*/
+
+                        ____napi_schedule(sd, &amp;amp;sd-&amp;gt;backlog);
+
+            }
+
+            goto enqueue;
+
+      }
+      sd-&amp;gt;dropped++;
+
+      rps_unlock(sd);
+
+      local_irq_restore(flags);
+      atomic_long_inc(&amp;amp;skb-&amp;gt;dev-&amp;gt;rx_dropped);
+
+      kfree_skb(skb);
+
+      return NET_RX_DROP;
+
+}
+
+
+/* Called with irq disabled */
+
+static inline void ____napi_schedule(struct softnet_data *sd,   
+                             struct napi_struct *napi)
+
+{
+      list_add_tail(&amp;amp;napi-&amp;gt;poll_list, &amp;amp;sd-&amp;gt;poll_list);
+
+      /*
+
+触发软中断，软中断处理函数是在/net/core/dev.c:net_dev_init()中初始化的，
+
+NET_RX_SOFTIRQ对应的处理函数是net_rx_action()
+
+*/
+
+__raise_softirq_irqoff(NET_RX_SOFTIRQ);
+
+}
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;其实到上面为止，网络数据处理的顶半部（Top Half） 已经处理完了，剩下的就是底半部(bottom half)的事情了。什么是顶半部，什么是底半部？&lt;/p&gt;
+&lt;p&gt;这个在LDD中有讲到。简单说，每次中断都需要完成一定数量的工作，但是我们又希望每次中断占用的时间不要太长，于是，这就产生了矛盾。为了调和这种矛盾，引入了顶半部 底半部，顶半部用来响应实际的硬件中断，顶半部的主要任务就是将中断任务进行简单的处理，然后就交给底半部处理，底半部则在稍后一个比较安全的时间里(硬件中断开启)慢慢悠悠的处理那些耗时的任务。&lt;/p&gt;
+&lt;p&gt;下面再看一下net_rx_action()&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;static void net_rx_action(struct softirq_action *h)
+
+{
+
+  struct softnet_data *sd = &amp;amp;__get_cpu_var(softnet_data);
+
+  unsigned long time_limit = jiffies + 2;
+
+  int budget = netdev_budget;
+
+  void *have;
+
+  local_irq_disable();
+
+  /*
+
+不为空，因为前面有个list_add_tail(&amp;amp;napi-&amp;gt;poll_list, &amp;amp;sd-&amp;gt;poll_list);
+    */
+
+  while (!list_empty(&amp;amp;sd-&amp;gt;poll_list)) {
+
+        struct napi_struct *n;
+
+        int work, weight;
+
+
+
+        /* If softirq window is exhuasted then punt.
+
+         * Allow this to run for 2 jiffies since which will allow
+
+         * an average latency of 1.5/HZ.
+
+         */
+
+        if (unlikely(budget &amp;lt;= 0 || time_after(jiffies, time_limit)))
+
+              goto softnet_break;
+
+
+
+        local_irq_enable();
+
+
+
+        /* Even though interrupts have been re-enabled, this
+
+         * access is safe because interrupts can only add new
+
+         * entries to the tail of this list, and only -&amp;gt;poll()
+
+         * calls can remove this head entry from the list.
+
+         */
+
+/*取得sd-&amp;gt;backlog，是怎么取到的？
+
+在前面的____napi_schedule()里有个函数，
+
+list_add_tail(&amp;amp;napi-&amp;gt;poll_list, &amp;amp;sd-&amp;gt;poll_list);
+
+所以就相当与通过napi-&amp;gt;poll_list取到napi。
+
+    */
+
+        n = list_first_entry(&amp;amp;sd-&amp;gt;poll_list, struct napi_struct, poll_list);
+
+
+
+        have = netpoll_poll_lock(n);
+
+/*在net_dev_init()中有初始化weight，默认是64.该值具体作用不是很清楚，从代 码，当work == weight，或者budget &amp;lt; 0 时，软中断会结束，所以，这个weight 与 bgdget决定了每次软中断处理的数据包的总数。Weight应该是随着带宽的增加而增加的。64是百兆环境的推荐值。*/
+
+        weight = n-&amp;gt;weight;
+
+
+
+        /* This NAPI_STATE_SCHED test is for avoiding a race
+
+         * with netpoll&amp;#39;s poll_napi().  Only the entity which
+
+         * obtains the lock and sees NAPI_STATE_SCHED set will
+
+         * actually make the -&amp;gt;poll() call.  Therefore we avoid
+
+         * accidentally calling -&amp;gt;poll() when NAPI is not scheduled.
+
+         */
+
+        work = 0;
+
+        if (test_bit(NAPI_STATE_SCHED, &amp;amp;n-&amp;gt;state)) {
+
+              /*poll在net_dev_init()进行初始化，初始是process_backlog()。在napi环境下该指针会被重写。下面会讨论*/
+
+              work = n-&amp;gt;poll(n, weight);
+
+              trace_napi_poll(n);
+
+        }
+
+
+
+        WARN_ON_ONCE(work &amp;gt; weight);
+
+
+
+        budget -= work;
+
+
+
+        local_irq_disable();
+
+
+
+        /* Drivers must not modify the NAPI state if they
+
+         * consume the entire weight.  In such cases this code
+
+         * still &amp;quot;owns&amp;quot; the NAPI instance and therefore can
+
+         * move the instance around on the list at-will.
+
+         */
+
+        /*处理的数据包等于weight，软中断结束*/
+
+        if (unlikely(work == weight)) {
+
+              if (unlikely(napi_disable_pending(n))) {
+
+                    local_irq_enable();
+
+                    napi_complete(n);
+
+                    local_irq_disable();
+
+              } else
+
+                    list_move_tail(&amp;amp;n-&amp;gt;poll_list, &amp;amp;sd-&amp;gt;poll_list);
+
+        }
+
+
+
+        netpoll_poll_unlock(have);
+
+  }
+
+out:
+
+  net_rps_action_and_irq_enable(sd);
+
+
+
+#ifdef CONFIG_NET_DMA
+
+  /*
+
+   * There may not be any more sk_buffs coming right now, so push
+
+   * any pending DMA copies to hardware
+
+   */
+
+  dma_issue_pending_all();
+
+#endif
+
+  return;
+
+softnet_break:
+
+  sd-&amp;gt;time_squeeze++;
+
+  __raise_softirq_irqoff(NET_RX_SOFTIRQ);
+
+  goto out;
+
+}
+
+
+
+/*非napi的处理函数，虽然说是非napi，但是函数里出现了napi_struct，其实这是为了兼容性的原因，等讲完NAPI方式就会明白了。另外还要注意，该函数中对process_queue 与 input_pkt_queue的灵活处理，估计也是为了某种兼容*/
+
+static int process_backlog(struct napi_struct *napi, int quota)
+
+{
+
+ …..
+
+  while (work &amp;lt; quota) {
+
+        struct sk_buff *skb;
+
+        unsigned int qlen;
+
+
+
+        while ((skb = __skb_dequeue(&amp;amp;sd-&amp;gt;process_queue))) {
+
+              …….
+
+/*最终调用的是__netif_receive_skb，下面会分析该函数*/
+
+              __netif_receive_skb(skb);
+
+             …….
+
+        }
+
+
+        rps_lock(sd);
+
+        qlen = skb_queue_len(&amp;amp;sd-&amp;gt;input_pkt_queue);
+
+        if (qlen)
+
+              skb_queue_splice_tail_init(&amp;amp;sd-&amp;gt;input_pkt_queue,
+
+                                   &amp;amp;sd-&amp;gt;process_queue);
+
+     ………
+
+        }
+
+        rps_unlock(sd);
+
+  }
+
+}
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;———————————————华丽的分割线———————————————————–&lt;/p&gt;
+&lt;p&gt;下面讲另一个函数NAPI方式.
+还是从e1000e的驱动说起。
+上面提到的e1000e的中断处理函数，&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;/*中断处理函数*/
+
+static irqreturn_t e1000_intr(int __always_unused irq, void *data)
+
+{
+
+………………
+
+/*前面是一些检测的东西，不详细说了。下面的是重点。
+
+代码的接收分为NAPI方式与非NAPI方式。什么是NAPI，问问google。
+
+但是二者的代码流程，下面都会详细分析。
+
+先分析非NAPI方式
+
+*/
+
+#ifdef CONFIG_E1000E_NAPI
+
+/*NAPI方式*/
+
+  if (napi_schedule_prep(&amp;amp;adapter-&amp;gt;napi)) {
+
+        adapter-&amp;gt;total_tx_bytes = 0;
+
+        adapter-&amp;gt;total_tx_packets = 0;
+
+        adapter-&amp;gt;total_rx_bytes = 0;
+
+        adapter-&amp;gt;total_rx_packets = 0;
+
+        __napi_schedule(&amp;amp;adapter-&amp;gt;napi);
+
+  }
+
+#else
+
+/*非NAPI方式*/
+
+  adapter-&amp;gt;total_tx_bytes = 0;
+
+  adapter-&amp;gt;total_rx_bytes = 0;
+
+  adapter-&amp;gt;total_tx_packets = 0;
+
+  adapter-&amp;gt;total_rx_packets = 0;
+
+
+
+  for (i = 0; i &amp;lt; E1000_MAX_INTR; i++) {
+
+        /*clean_rx是在初始化时指定的，一般都是 e1000_clean_rx_irq()*/
+
+rx_cleaned = adapter-&amp;gt;clean_rx(adapter-&amp;gt;rx_ring);
+
+        tx_cleaned_complete = e1000_clean_tx_irq(adapter-&amp;gt;tx_ring);
+
+        if (!rx_cleaned &amp;amp;&amp;amp; tx_cleaned_complete)
+
+              break;
+
+  }
+
+  if (likely(adapter-&amp;gt;itr_setting &amp;amp; 3))
+
+        e1000_set_itr(adapter);
+
+#endif /* CONFIG_E1000E_NAPI */
+
+  return IRQ_HANDLED;
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;}&lt;/p&gt;
+&lt;p&gt;&lt;em&gt;__napi_schedule(&amp;amp;adapter-&amp;gt;napi);&lt;/em&gt; 该函数与上面非NAPI的 &lt;em&gt;____napi_schedule(struct softnet_data &lt;/em&gt;sd, struct napi_struct &lt;em&gt;napi)&lt;/em&gt; 的参数不一样，前者是后者的包裹函数。唯一不同的是二者调度的napi不一样，前者调度的是设备的napi结构，后者调度的是&lt;em&gt;softnet_data&lt;/em&gt; 的napi，而对应的napi的poll函数是不一样的。&lt;/p&gt;
+&lt;p&gt;在e1000e初始化时，已经调用netif_napi_add(netdev, &amp;amp;adapter-&amp;gt;napi, e1000e_poll, 64);将napi的poll替换掉了。简单说下调用过程：&lt;/p&gt;
+&lt;p&gt;e1000e_poll-&amp;gt;e1000_clean_rx_irq-&amp;gt;e1000_receive_skb-&amp;gt;netif_receive_skb.&lt;/p&gt;
+&lt;p&gt;大致上分析完了，现在应该可以看明白最上面的结论了吧。 &lt;/p&gt;</description><dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">flanker</dc:creator><pubDate>Tue, 01 Apr 2014 10:52:14 +0800</pubDate><guid>tag:flankersky.com,2014-04-01:linux/safenetif.html</guid><category>linux</category><category>kernel</category></item><item><title>一个netif_receive_skb引发的死锁</title><link>http://flankersky.com/linux/netiflock.html</link><description>&lt;p&gt;【文章迁移自本人CU论坛】&lt;/p&gt;
+&lt;p&gt;&amp;emsp;&amp;emsp;项目开发中遇到一个内核死锁的问题，无奈在论坛发帖求助，现在看来，问题基本得到解决，明天长时间
+测试下看看。现在我把该问题总结下，帮助自己深入学习，也希望能帮到其他人。&lt;/p&gt;
+&lt;p&gt;问题贴见：&lt;a href="http://bbs.chinaunix.net/thread-4103903-1-1.html"&gt;http://bbs.chinaunix.net/thread-4103903-1-1.html&lt;/a&gt;&lt;/p&gt;
+&lt;p&gt;下面是出错时的信息，程序是在vmware里跑的，通过串口输出的信息，信息应该还算完整。&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;[ 3182.546342] BUG: soft lockup - CPU#0 stuck for 22s! [KksTx:2742]  ----&amp;lt;1&amp;gt;
+
+[ 3182.547942] Modules linked in: kksfilter(O)  e1000e(O) vmhgfs(O) vsock(O) ----&amp;lt;2&amp;gt; 
+acpiphp vmwgfx  ttm drm snd_ens1371 gameport snd_ac97_codec ac97_bus snd_pcm vmw_balloon snd_seq_midi snd_rawmidi snd_seq_midi_event psmouse snd_seq serio_raw snd_timer snd_seq_device snd joydev soundcore snd_page_alloc bnep rfcomm bluetooth parport_pc ppdev vmci(O) shpchp mac_hid i2c_piix4 lp parport usbhid hid floppy mptspi mptscsih mptbase vmxnet(O) vmw_pvscsi vmxnet3 [last unloaded: e1000e]
+
+[ 3182.560267] irq event stamp: 0
+[ 3182.561060] hardirqs last enabled at (0): [&amp;lt; (null)&amp;gt;] (null)
+[ 3182.562649] hardirqs last disabled at (0): [] copy_process+0x484/0x1170
+[ 3182.564637] softirqs last enabled at (0): [] copy_process+0x484/0x1170
+[ 3182.566563] softirqs last disabled at (0): [&amp;lt; (null)&amp;gt;] (null)
+[ 3182.568115] Modules linked in: kksfilter(O) e1000e(O) vmhgfs(O) vsock(O) acpiphp vmwgfx ttm drm snd_ens1371 gameport snd_ac97_codec ac97_bus snd_pcm vmw_balloon snd_seq_midi snd_rawmidi snd_seq_midi_event psmouse snd_seq serio_raw snd_timer snd_seq_device snd joydev soundcore snd_page_alloc bnep rfcomm bluetooth parport_pc ppdev vmci(O) shpchp mac_hid i2c_piix4 lp parport usbhid hid floppy mptspi mptscsih mptbase vmxnet(O) vmw_pvscsi vmxnet3 [last unloaded: e1000e]
+[ 3182.580028]
+[ 3182.580431] Pid: 2742, comm: KksTx Tainted: G O 3.2.6 #18 VMware, Inc. VMware Virtual Platform/440BX Desktop Reference Platform
+[ 3182.583631] EIP: 0060:[] EFLAGS: 00000282 CPU: 0
+[ 3182.585043] EIP is at delay_tsc+0x1f/0x70  ----&amp;lt;3&amp;gt;
+[ 3182.586068] EAX: 7170b643 EBX: f0a98d34 ECX: f0a98d34 EDX: 000007db
+[ 3182.587670] ESI: 00000000 EDI: 00000001 EBP: f680dbb4 ESP: f680dba4
+[ 3182.589252] DS: 007b ES: 007b FS: 00d8 GS: 00e0 SS: 0068
+[ 3182.590632] Process KksTx (pid: 2742, ti=f680c000 task=e604ea80 task.ti=f4de6000)
+[ 3182.592516] Stack:
+[ 3182.593046] 7170b5d7 f0a98d34 280c08d0 00000000 f680dbbc c12ba62e f680dbdc c12c150b
+[ 3182.595284] 00000001 a087b7e8 00000001 f0a98d34 c1e896c0 f0a98d00 f680dbf8 c159eefd
+[ 3182.597516] 00000000 00000002 00000000 c14f6f2a f4c91600 f680dc4c c14f6f2a 00000050
+[ 3182.599751] Call Trace:
+[ 3182.600390] [] __delay+0xe/0x10
+[ 3182.601454] [] do_raw_spin_lock+0xab/0xf0
+[ 3182.602706] [] _raw_spin_lock_nested+0x3d/0x50
+[ 3182.604087] [] ? tcp_v4_rcv+0x76a/0xaa0
+[ 3182.605285] [] tcp_v4_rcv+0x76a/0xaa0
+[ 3182.606451] [] ip_local_deliver_finish+0xdf/0x380
+[ 3182.607866] [] ? ip_local_deliver_finish+0x3c/0x380
+[ 3182.609318] [] ip_local_deliver+0x7f/0x90
+[ 3182.610578] [] ip_rcv_finish+0x16e/0x560
+[ 3182.611804] [] ip_rcv+0x25a/0x320
+[ 3182.612880] [] ? inet_del_protocol+0x30/0x30
+[ 3182.614193] [] __netif_receive_skb+0x4c2/0x570
+[ 3182.615547] [] ? __netif_receive_skb+0xdc/0x570
+[ 3182.616918] [] netif_receive_skb+0xcb/0xe0
+[ 3182.618187] [] ? netif_receive_skb+0x1f/0xe0
+[ 3182.619517] [] SendSkb2Middle+0x162/0x176 [kksfilter]
+[ 3182.621019] [] KksNatHandler+0x612/0x86d [kksfilter]
+[ 3182.622516] [] ? sscanf+0x11/0x14
+[ 3182.623592] [] ? kks_inet_addr+0x37/0x4f [kksfilter]
+[ 3182.625069] [] kks_rx+0x4e/0xb9 [kksfilter]
+[ 3182.626362] [] hook_local_in+0x111/0x1d7 [kksfilter]
+[ 3182.627838] [] ? inet_del_protocol+0x30/0x30
+[ 3182.629145] [] nf_iterate+0x63/0x90
+[ 3182.630274] [] ? inet_del_protocol+0x30/0x30
+[ 3182.631582] [] nf_hook_slow+0x92/0x150
+[ 3182.632761] [] ? inet_del_protocol+0x30/0x30
+[ 3182.634069] [] ip_rcv+0x24a/0x320
+[ 3182.635155] [] ? inet_del_protocol+0x30/0x30
+[ 3182.636465] [] __netif_receive_skb+0x4c2/0x570
+[ 3182.638624] [] ? __netif_receive_skb+0xdc/0x570
+[ 3182.639996] [] netif_receive_skb+0xcb/0xe0
+[ 3182.641250] [] ? netif_receive_skb+0x1f/0xe0
+[ 3182.642564] [] napi_skb_finish+0x37/0x50
+[ 3182.643781] [] napi_gro_receive+0xa1/0xb0
+[ 3182.645060] [] e1000_receive_skb+0xc6/0x170 [e1000e]
+[ 3182.646577] [] ? __kfree_skb+0x3d/0x90
+[ 3182.647779] [] e1000_clean_rx_irq+0x206/0x340 [e1000e]
+[ 3182.649419] [] e1000e_poll+0x64/0x2d0 [e1000e]
+[ 3182.650768] [] net_rx_action+0x12d/0x240
+[ 3182.651988] [] ? local_bh_enable+0xd0/0xd0
+[ 3182.653245] [] __do_softirq+0x99/0x1d0
+[ 3182.654429] [] ? local_bh_enable+0xd0/0xd0
+[ 3182.655688] [ 3182.656264] [] ? irq_exit+0x7e/0xa0
+[ 3182.657406] [] ? do_IRQ+0x4b/0xc0
+[ 3182.658496] [] ? common_interrupt+0x35/0x3c
+[ 3182.659796] [] ? tcp_connect+0x318/0x490     -------&amp;lt;4&amp;gt;
+[ 3182.661011] [] ? tcp_validate_incoming+0x71/0x340
+[ 3182.662421] [] ? tcp_check_req+0x260/0x4b0
+[ 3182.663676] [] ? tcp_rcv_state_process+0x47/0xb80
+[ 3182.665078] [] ? tcp_check_req+0x2e3/0x4b0
+[ 3182.666338] [] ? tcp_child_process+0x8d/0x150
+[ 3182.667660] [] ? tcp_v4_do_rcv+0x2aa/0x3c0
+[ 3182.668922] [] ? do_raw_spin_lock+0x3b/0xf0
+[ 3182.670202] [] ? _raw_spin_lock_nested+0x3d/0x50
+[ 3182.671603] [] ? tcp_v4_rcv+0x78a/0xaa0
+[ 3182.672800] [] ? ip_local_deliver_finish+0xdf/0x380
+[ 3182.674263] [] ? ip_local_deliver_finish+0x3c/0x380
+[ 3182.675713] [] ? ip_local_deliver+0x7f/0x90
+[ 3182.676991] [] ? ip_rcv_finish+0x16e/0x560
+[ 3182.678259] [] ? ip_rcv+0x25a/0x320
+[ 3182.679371] [] ? inet_del_protocol+0x30/0x30
+[ 3182.680670] [] ? __netif_receive_skb+0x4c2/0x570
+[ 3182.682057] [] ? __netif_receive_skb+0xdc/0x570
+[ 3182.683436] [] ? netif_receive_skb+0xcb/0xe0
+[ 3182.684730] [] ? netif_receive_skb+0x1f/0xe0
+[ 3182.686027] [] ? SendSkb2Middle+0x162/0x176 [kksfilter]
+[ 3182.687568] [] ? KksNatHandler+0x6cd/0x86d [kksfilter]
+[ 3182.689094] [] ? futex_wait_requeue_pi+0x1c0/0x380
+[ 3182.690526] [] ? kks_tx+0x60/0x81 [kksfilter]
+[ 3182.691859] [] ? KksNatHandler+0x86d/0x86d [kksfilter]
+[ 3182.693386] [] ? kthread+0x78/0x80
+[ 3182.694488] [] ? __init_kthread_worker+0x60/0x60
+[ 3182.695876] [] ? kernel_thread_helper+0x6/0x10
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;先说明一下oops信息怎么看，先看出错的大致原因。&lt;/p&gt;
+&lt;p&gt;&amp;lt;1&amp;gt;处表明这是soft lockup，一般就是指死锁，看门狗抛出异常。&lt;/p&gt;
+&lt;p&gt;&amp;lt;2&amp;gt;表明出错的是在哪个模块（如果出错是在模块里的话），&lt;/p&gt;
+&lt;p&gt;&amp;lt;3&amp;gt;EIP 是出错的指令地址，也就是在哪个函数上出错的，但通常用处不大（个人感觉）。。&lt;/p&gt;
+&lt;p&gt;知道了是死锁，那就继续查找死锁发生在哪个地方。就是看下面的call trace了，call trace 是函数
+调用栈的意思。顾名思义，就是内核崩溃前的函数调用情况。call trace的阅读的大致原则是从下往上看(栈)。首先，代码从最下往上执行，执行到&lt;span style="color: #ff0000;"&gt;&amp;lt;4&amp;gt; &lt;span style="color: #000000;"&gt;的时候被一个irq（中断给中断掉了。）然后上面就是中断后的函数调用。由此便可以猜测，是我写的代码跟系统正常的中断产生了资源竞争。&lt;/span&gt;&lt;/span&gt;&lt;/p&gt;
+&lt;p&gt;具体分析：
+   kks_tx是内核的一个线程，这个线程直接调用了netif_receive_skb，然后再进入 tcp_v4_rcv时获得
+了一个自旋锁，但是在释放锁之前，被网络数据的软中断给中断掉了（也就是红色上方的那些信息）,中断例程也执行了netif_receive_skb，再次等待同一个自旋锁，所以造成了死锁。&lt;/p&gt;
+&lt;p&gt;刚开始，迷惑不解是因为对LDD3中的一句话没有理解清楚，获得自旋锁之后会禁止中断
+，如果禁止中断了，肯定就不会死锁了。但其实是自己记错了，单纯的spin_lock是不会禁止中断的，只有spin_lock_irq 和 spin_lock_bh会禁止中断，前者是禁止所有中断，后者只是禁止软中断。所以，查看了tcp_v4_rcv中的自旋锁，果然是没有禁止中断的，所以问题就出现在这个锁。但是，为什么系统中调用netif_receive_skb时为什么没有出现死锁的情况呢？原因是就在do_softirq中，&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;asmlinkage void do_softirq(void)
+{
+
+__u32 pending;
+unsigned long flags;
+
+// 这个函数判断，如果当前有硬件中断嵌套，或者
+// 有软中断正在执行时候，则马上返回。
+if (in_interrupt())
+
+return;
+// 关中断
+local_irq_save(flags);
+
+// 判断是否有 pending 的软中断需要处理。
+pending = local_softirq_pending();
+
+// 如果有则调用 __do_softirq() 进行实际处理
+
+if (pending)
+
+__do_softirq();
+
+// 开中断继续执行
+
+local_irq_restore(flags);
+
+}
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;刚开始看到这段代码以为是关掉中断的原因，但是，后来一想， 函数 local_irq_save是关掉所有中断
+(包括硬中断，废话)。这样，肯定会出现问题，因为上面的netif_receive_skb会耗费很长时间，不可能关闭全部中断。所以继续看__do_softirq();&lt;/p&gt;
+&lt;p&gt;摘录一段高手对__do_softirq()的注释，地址：
+   &lt;a href="http://linux.ccidnet.com/art/741/20070612/1110075_1.html" title="http://linux.ccidnet.com/art/741/20070612/1110075_1.html"&gt;http://linux.ccidnet.com/art/741/20070612/1110075_1.html&lt;/a&gt;&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;// do_IRQ 函数执行完硬件 ISR 后退出时调用此函数。
+
+void irq_exit(void)
+{
+
+account_system_vtime(current);
+
+trace_hardirq_exit();
+
+sub_preempt_count(IRQ_EXIT_OFFSET);
+//
+// 判断当前是否有硬件中断嵌套，并且是否有软中断在
+// pending 状态，注意：这里只有两个条件同时满足
+// 时，才有可能调用 do_softirq() 进入软中断。也就是
+// 说确认当前所有硬件中断处理完成，且有硬件中断安装了
+// 软中断处理时理时才会进入。
+//
+if (!in_interrupt() &amp;amp;amp;&amp;amp;amp; local_softirq_pending())
+
+//
+// 其实这里就是调用 do_softirq() 执行
+//
+invoke_softirq();
+preempt_enable_no_resched();
+}
+
+#ifndef __ARCH_HAS_DO_SOFTIRQ
+
+
+
+asmlinkage void do_softirq(void)
+{
+__u32 pending;
+unsigned long flags;
+//
+// 这个函数判断，如果当前有硬件中断嵌套，或者
+// 有软中断正在执行时候，则马上返回。在这个
+// 入口判断主要是为了与 ksoftirqd 互斥。
+//
+if (in_interrupt())
+
+return;
+
+//
+// 关中断执行以下代码
+//
+local_irq_save(flags);
+//
+// 判断是否有 pending 的软中断需要处理。
+//
+pending = local_softirq_pending();
+//
+
+// 如果有则调用 __do_softirq() 进行实际处理
+//
+if (pending)
+__do_softirq();
+//
+// 开中断继续执行
+//
+local_irq_restore(flags);
+}
+
+//
+// 最大软中断调用次数为 10 次。
+//
+#define MAX_SOFTIRQ_RESTART 10
+asmlinkage void __do_softirq(void)
+{
+//
+// 软件中断处理结构，此结构中包括了 ISR 中
+// 注册的回调函数。
+//
+struct softirq_action *h;
+__u32 pending;
+int max_restart = MAX_SOFTIRQ_RESTART;
+int cpu;
+//
+// 得到当前所有 pending 的软中断。
+//
+
+pending = local_softirq_pending();
+
+account_system_vtime(current);
+
+//
+// 执行到这里要屏蔽其他软中断，这里也就证明了
+// 每个 CPU 上同时运行的软中断只能有一个。
+//
+__local_bh_disable((unsigned long)__builtin_return_address(0));
+
+trace_softirq_enter();
+
+// 针对 SMP 得到当前正在处理的 CPU
+//
+cpu = smp_processor_id();
+//
+// 循环标志
+//
+restart:
+
+//
+// 每次循环在允许硬件 ISR 强占前，首先重置软中断
+// 的标志位。
+//
+
+/* Reset the pending bitmask before enabling irqs */
+
+set_softirq_pending(0);
+
+// 到这里才开中断运行，注意：以前运行状态一直是关中断
+// 运行，这时当前处理软中断才可能被硬件中断抢占。也就
+// 是说在进入软中断时不是一开始就会被硬件中断抢占。只有
+// 在这里以后的代码才可能被硬件中断抢占。
+//
+local_irq_enable();
+
+//
+// 这里要注意，以下代码运行时可以被硬件中断抢占，但
+// 这个硬件 ISR 执行完成后，它的所注册的软中断无法马上运行，
+// 别忘了，现在虽是开硬件中断执行，但前面的 __local_bh_disable()
+// 函数屏蔽了软中断。所以这种环境下只能被硬件中断抢占，但这
+// 个硬中断注册的软中断回调函数无法运行。要问为什么，那是因为
+// __local_bh_disable() 函数设置了一个标志当作互斥量，而这个
+// 标志正是上面的 irq_exit() 和 do_softirq() 函数中的
+// in_interrupt() 函数判断的条件之一，也就是说 in_interrupt()
+// 函数不仅检测硬中断而且还判断了软中断。所以在这个环境下触发
+// 硬中断时注册的软中断，根本无法重新进入到这个函数中来，只能
+// 是做一个标志，等待下面的重复循环（最大 MAX_SOFTIRQ_RESTART）
+// 才可能处理到这个时候触发的硬件中断所注册的软中断。
+//
+//
+// 得到软中断向量表。
+//
+h = softirq_vec;
+//
+// 循环处理所有 softirq 软中断注册函数。
+//
+
+do {
+
+// 如果对应的软中断设置 pending 标志则表明
+// 需要进一步处理它所注册的函数。
+//
+if (pending &amp;amp;amp; 1) {
+//
+// 在这里执行了这个软中断所注册的回调函数。
+//
+action(h);
+
+rcu_bh_qsctr_inc(cpu);
+}
+
+//
+// 继续找，直到把软中断向量表中所有 pending 的软
+// 中断处理完成。
+//
+
+h++;
+//
+
+// 从代码里可以看出按位操作，表明一次循环只
+// 处理 32 个软中断的回调函数。
+//
+pending &amp;amp;gt;&amp;amp;gt;= 1;
+} while (pending);
+//
+// 关中断执行以下代码。注意：这里又关中断了，下面的
+// 代码执行过程中硬件中断无法抢占。
+//
+local_irq_disable();
+//
+// 前面提到过，在刚才开硬件中断执行环境时只能被硬件中断
+// 抢占，在这个时候是无法处理软中断的，因为刚才开中
+// 断执行过程中可能多次被硬件中断抢占，每抢占一次就有可
+// 能注册一个软中断，所以要再重新取一次所有的软中断。
+// 以便下面的代码进行处理后跳回到 restart 处重复执行。
+//
+pending = local_softirq_pending();
+//
+// 如果在上面的开中断执行环境中触发了硬件中断，且每个都
+// 注册了一个软中断的话，这个软中断会设置 pending 位，
+// 但在当前一直屏蔽软中断的环境下无法得到执行，前面提
+// 到过，因为 irq_exit() 和 do_softirq() 根本无法进入到
+// 这个处理过程中来。这个在上面详细的记录过了。那么在
+// 这里又有了一个执行的机会。注意：虽然当前环境一直是
+// 处于屏蔽软中断执行的环境中，但在这里又给出了一个执行
+// 刚才在开中断环境过程中触发硬件中断时所注册的软中断的
+// 机会，其实只要理解了软中断机制就会知道，无非是在一些特
+// 定环境下调用 ISR 注册到软中断向量表里的函数而已。
+//
+
+
+
+//
+// 如果刚才触发的硬件中断注册了软中断，并且重复执行次数
+// 没有到 10 次的话，那么则跳转到 restart 标志处重复以上
+// 所介绍的所有步骤：设置软中断标志位，重新开中断执行...
+// 注意：这里是要两个条件都满足的情况下才可能重复以上步骤。
+if (pending &amp;amp;amp;&amp;amp;amp; --max_restart)
+goto restart;
+
+
+
+//
+// 如果以上步骤重复了 10 次后还有 pending 的软中断的话，
+// 那么系统在一定时间内可能达到了一个峰值，为了平衡这点。
+// 系统专门建立了一个 ksoftirqd 线程来处理，这样避免在一
+// 定时间内负荷太大。这个 ksoftirqd 线程本身是一个大循环，
+// 在某些条件下为了不负载过重，它是可以被其他进程抢占的，
+// 但注意，它是显示的调用了 preempt_xxx() 和 schedule()
+// 才会被抢占和切换的。这么做的原因是因为在它一旦调用
+// local_softirq_pending() 函数检测到有 pending 的软中断
+// 需要处理的时候，则会显示的调用 do_softirq() 来处理软中
+// 断。也就是说，下面代码唤醒的 ksoftirqd 线程有可能会回
+// 到这个函数当中来，尤其是在系统需要响应很多软中断的情况
+// 下，它的调用入口是 do_softirq()，这也就是为什么在 do_softirq()
+// 的入口处也会用 in_interrupt() 函数来判断是否有软中断
+// 正在处理的原因了，目的还是为了防止重入。ksoftirqd 实现
+// 看下面对 ksoftirqd() 函数的分析。
+
+if (pending)
+
+
+// 此函数实际是调用 wake_up_process() 来唤醒 ksoftirqd
+
+wakeup_softirqd();
+
+trace_softirq_exit();
+
+account_system_vtime(current);
+
+// 到最后才开软中断执行环境，允许软中断执行。注意：这里
+// 使用的不是 local_bh_enable()，不会再次触发 do_softirq()
+// 的调用。
+
+_local_bh_enable();
+
+}
+
+static int ksoftirqd(void * __bind_cpu)
+
+{
+// 显示调用此函数设置当前进程的静态优先级。当然，
+
+// 这个优先级会随调度器策略而变化。
+
+set_user_nice(current, 19);
+
+// 设置当前进程不允许被挂启
+
+flags |= PF_NOFREEZE;
+
+// 设置当前进程状态为可中断的状态，这种睡眠状
+// 态可响应信号处理等。
+
+set_current_state(TASK_INTERRUPTIBLE);
+
+// 下面是一个大循环，循环判断当前进程是否会停止，
+// 不会则继续判断当前是否有 pending 的软中断需
+// 要处理。
+
+while (!kthread_should_stop()) {
+
+// 如果可以进行处理，那么在此处理期间内禁止
+// 当前进程被抢占。
+
+preempt_disable();
+
+//
+
+// 首先判断系统当前没有需要处理的 pending 状态的
+// 软中断
+if (!local_softirq_pending()) {
+//
+// 没有的话在主动放弃 CPU 前先要允许抢占，因为
+// 一直是在不允许抢占状态下执行的代码。
+//
+preempt_enable_no_resched();
+//
+// 显示调用此函数主动放弃 CPU 将当前进程放入睡眠队列，
+// 并切换新的进程执行（调度器相关不记录在此）
+//
+schedule();
+//
+// 注意：如果当前显示调用 schedule() 函数主动切换的进
+// 程再次被调度执行的话，那么将从调用这个函数的下一条
+// 语句开始执行。也就是说，在这里当前进程再次被执行的
+// 话，将会执行下面的 preempt_disable() 函数。
+
+// 当进程再度被调度时，在以下处理期间内禁止当前进程
+// 被抢占。
+//
+preempt_disable();
+}
+
+//
+// 设置当前进程为运行状态。注意：已经设置了当前进程不可抢占
+
+// 在进入循环后，以上两个分支不论走哪个都会执行到这里。一是
+// 进入循环时就有 pending 的软中断需要执行时。二是进入循环时
+// 没有 pending 的软中断，当前进程再次被调度获得 CPU 时继续
+// 执行时。
+__set_current_state(TASK_RUNNING);
+
+//
+// 循环判断是否有 pending 的软中断，如果有则调用 do_softirq()
+// 来做具体处理。注意：这里又是一个 do_softirq() 的入口点，
+// 那么在 __do_softirq() 当中循环处理 10 次软中断的回调函数
+// 后，如果还有 pending 的话，会又调用到这里。那么在这里则
+// 又会有可能去调用 __do_softirq() 来处理软中断回调函数。在前
+// 面介绍 __do_softirq() 时已经提到过，处理 10 次还处理不完的
+// 话说明系统正处于繁忙状态。根据以上分析，我们可以试想如果在
+// 系统非常繁忙时，这个进程将会与 do_softirq() 相互交替执行，
+// 这时此进程占用 CPU 应该会很高，虽然下面的 cond_resched()
+// 函数做了一些处理，它在处理完一轮软中断后当前处理进程可能会
+// 因被调度而减少 CPU 负荷，但是在非常繁忙时这个进程仍然有可
+// 能大量占用 CPU。
+//
+
+while (local_softirq_pending()) {
+
+/* Preempt disable stops cpu going offline.
+If already offline, we&amp;amp;#39;ll be on wrong CPU:
+
+don&amp;amp;#39;t process */
+if (cpu_is_offline((long)__bind_cpu))
+
+//
+// 如果当前被关联的 CPU 无法继续处理则跳转
+// 到 wait_to_die 标记出，等待结束并退出。
+//
+
+goto wait_to_die;
+
+//
+// 执行 do_softirq() 来处理具体的软中断回调函数。注
+// 意：如果此时有一个正在处理的软中断的话，则会马上
+// 返回，还记得前面介绍的 in_interrupt() 函数么。
+do_softirq();
+//
+// 允许当前进程被抢占。
+//
+preempt_enable_no_resched();
+//
+// 这个函数有可能间接的调用 schedule() 来切换当前
+// 进程，而且上面已经允许当前进程可被抢占。也就是
+// 说在处理完一轮软中断回调函数时，有可能会切换到
+// 其他进程。我认为这样做的目的一是为了在某些负载
+// 超标的情况下不至于让这个进程长时间大量的占用 CPU，
+// 二是让在有很多软中断需要处理时不至于让其他进程
+// 得不到响应。
+//
+cond_resched();
+//
+// 禁止当前进程被抢占。
+//
+preempt_disable();
+//
+// 处理完所有软中断了吗？没有的话继续循环以上步骤
+//
+}
+//
+// 待一切都处理完成后，允许当前进程被抢占，并设置
+// 当前进程状态为可中断状态，继续循环以上所有过程。
+preempt_enable();
+set_current_state(TASK_INTERRUPTIBLE);
+}
+//
+// 如果将会停止则设置当前进程为运行状态后直接返回。
+// 调度器会根据优先级来使当前进程运行。
+//
+__set_current_state(TASK_RUNNING);
+return 0;
+//
+// 一直等待到当前进程被停止
+//
+wait_to_die:
+//
+// 允许当前进程被抢占。
+//
+preempt_enable();
+
+/* Wait for kthread_stop */
+//
+// 设置当前进程状态为可中断的状态，这种睡眠状
+// 态可响应信号处理等。
+//
+set_current_state(TASK_INTERRUPTIBLE);
+//
+// 判断当前进程是否会被停止，如果不是的话
+// 则设置进程状态为可中断状态并放弃当前 CPU
+// 主动切换。也就是说这里将一直等待当前进程
+// 将被停止时候才结束。
+//
+while (!kthread_should_stop()) {
+schedule();
+set_current_state(TASK_INTERRUPTIBLE);
+}
+//
+// 如果将会停止则设置当前进程为运行状态后直接返回。
+// 调度器会根据优先级来使当前进程运行。
+//
+__set_current_state(TASK_RUNNING);
+return 0;
+}
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;可以看出在执行软中断的注册函数之前，是关闭了软中断，但是硬中断是开着的。所以，对于
+netif_receive_skb的问题，暂时想出了两种方法：&lt;/p&gt;
+&lt;p&gt;1.在调用netif_receive_skb的上下文中禁止软中断，理论上可行。&lt;/p&gt;
+&lt;p&gt;2.直接调用netif_rx，netif_rx是旧接口，是在NAPI之前的网络数据包的处理函数，但是在e1000e的驱
+动里也看到了这个函数，是在禁用NAPI的情况下调用的该函数(估计是为了兼容的原因)，所以这个函数还是可以用的。目前测试看来，没有出现问题。理论上也不会出错，因为netif_rx的作用的是将skb放到了softnet_data-&amp;gt;input_pkt_queue中，之后也会触发软中断来取数据包。所以，综合考虑，直接用netif_rx是比较好的方案。&lt;/p&gt;
+&lt;p&gt;PS：虽然天天看网络 内核相关的东西，但是真的发现理解的不深入，大都是一知半解，正真遇到问题才想起来好好看书，不应该啊，不应该。其实很多问题LDD3中都有说明。吸取教训。&lt;/p&gt;</description><dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">flanker</dc:creator><pubDate>Tue, 01 Apr 2014 10:51:22 +0800</pubDate><guid>tag:flankersky.com,2014-04-01:linux/netiflock.html</guid><category>linux</category><category>kernel</category></item></channel></rss>

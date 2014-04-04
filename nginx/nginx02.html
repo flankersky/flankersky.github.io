@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>nginx中的upstream相关(2)：上游响应的接收 - flanker's sky</title>
+    <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/bootstrap.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/niu2.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/custom.css" type="text/css" />
+<link rel="stylesheet" href="http://flankersky.com/theme/css/pygments/github.css" type="text/css" />    
+    <script type="text/javascript">
+        window.onload = function() {
+        };
+    </script>
+    <!-- HTML5 shim and Respond.js IE8 support of HTML5 elements and media queries -->
+    <!--[if lt IE 9]>
+        <script src="http://flankersky.com/theme/js/html5shiv.js"></script>
+        <script src="http://flankersky.com/theme/js/respond.min.js"></script>
+    <![endif]-->
+    <!--[if IE 7]>
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome-ie7.min.css" type="text/css" />
+    <![endif]--></head>
+  <body> 
+    <div id="body-header"><div class="navbar navbar-inverse navbar-fixed-top">
+<div class="col-md-12">
+    <div class="navbar-header">
+        <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+        </button>
+        <a class="navbar-brand" href="http://flankersky.com">
+            <i class="fa fa-home"></i>flanker's sky
+        </a>
+    </div>
+	<nav class="collapse navbar-collapse bs-navbar-collapse" role="navigation">
+		<ul class="nav navbar-nav"><li><a href="/about.html" title="about me">
+			    <i class="fa fa-anchor"></i>关于</a>
+			</li><!-- category dropdown list -->
+		<li class="dropdown">
+           <a href="#" class="dropdown-toggle" data-toggle="dropdown">
+                <i class="fa fa-folder-open"></i>分类<b class="caret"></b>
+           </a>
+           <ul class="dropdown-menu"><li><a href="http://flankersky.com/linux/index.html"><i class="fa fa-folder-close"></i>linux                      (4)</a></li><li><a href="http://flankersky.com/nginx/index.html"><i class="fa fa-folder-close"></i>nginx                      (3)</a></li><li><a href="http://flankersky.com/windows/index.html"><i class="fa fa-folder-close"></i>windows                      (4)</a></li></ul>
+        </li>
+        <!--  self defined dropdown list --></ul>
+        
+        <!-- right nav bar -->
+		<ul class="nav navbar-nav navbar-right">
+		<!-- google custom search --></ul>
+	</nav>
+</div>
+</div></div>
+    
+    <div id="body-content"><div class="col-md-8 col-md-offset-2"><h1 id="content-heading">nginx中的upstream相关(2)：上游响应的接收</h1></div>
+<div id="niu2-left-container" class="col-md-6 col-md-offset-2">
+    <div id="niu2-main-content">
+        <p>上回说道upstream向上游发送的过程，下面说一下upstream对上游响应的接收过程。
+Ps:上回好像忘了说明文中用到的nginx版本了。声明一下，文中的代码版本是nginx-1.4.4</p>
+<p>在连接upstream的函数里ngx_http_upstream_connect（）设置了读事件的回调函数</p>
+<p>u-&gt;read_event_handler = ngx_http_upstream_process_header;
+所以，upstream的数据的接收肯定是从这个函数开始，有图才有真相</p>
+<p><img alt="" src="http://img15.poco.cn/mypoco/myphoto/20140331/11/174674363201403311134118THX.jpg" /></p>
+<p>再接着具体分析下每个函数：</p>
+<h2 id="c4ca4238a0b923820dcc509a6f75849b">1</h2>
+<div class="codehilite"><pre>static void
+ngx_http_upstream_process_header(ngx_http_request_t *r, ngx_http_upstream_t *u)
+{
+
+/*
+ *判断读事件是否超时
+ */
+
+if (c-&gt;read-&gt;timedout) {
+    ngx_http_upstream_next(r, u, NGX_HTTP_UPSTREAM_FT_TIMEOUT);
+    return;
+}
+
+/*
+ *buffer是接收缓存，如果是空，就从内存池中分配
+ */
+
+if (u-&gt;buffer.start == NULL) {
+    u-&gt;buffer.start = ngx_palloc(r-&gt;pool, u-&gt;conf-&gt;buffer_size);
+    if (u-&gt;buffer.start == NULL) {
+        ngx_http_upstream_finalize_request(r, u,
+                 NGX_HTTP_INTERNAL_SERVER_ERROR);
+        return;
+    }
+/*
+ *初始化缓存区，
+ *pos是当前位置，数据从pos开始存储。
+ *Start end 分别是整个缓冲区的开始 结束，初始化之后就不变了
+ *Last是数据区的结尾。
+ */
+    u-&gt;buffer.pos = u-&gt;buffer.start;
+    u-&gt;buffer.last = u-&gt;buffer.start;
+    u-&gt;buffer.end = u-&gt;buffer.start + u-&gt;conf-&gt;buffer_size;
+    u-&gt;buffer.temporary = 1;
+
+    u-&gt;buffer.tag = u-&gt;output.tag;
+....
+}
+
+for ( ;; ) {
+/*
+ *接收数据
+ */         
+    n = c-&gt;recv(c, u-&gt;buffer.last, u-&gt;buffer.end - u-&gt;buffer.last);
+
+
+....
+    u-&gt;buffer.last += n;
+....
+
+/*
+ *调用自定义的头部处理函数
+ */
+    rc = u-&gt;process_header(r);
+
+    if (rc == NGX_AGAIN) {
+ /*
+  *缓冲区满了
+  */
+        if (u-&gt;buffer.last == u-&gt;buffer.end) {
+            ngx_log_error(NGX_LOG_ERR, c-&gt;log, 0,
+                          &quot;upstream sent too big header&quot;);
+
+            ngx_http_upstream_next(r, u,
+                                   NGX_HTTP_UPSTREAM_FT_INVALID_HEADER);
+            return;
+        }
+
+        continue;
+    }
+
+    break;
+}
+
+//rc == NGX_OK
+
+if (u-&gt;headers_in.status_n &gt; NGX_HTTP_SPECIAL_RESPONSE) {
+
+    if (r-&gt;subrequest_in_memory) {
+        u-&gt;buffer.last = u-&gt;buffer.pos;
+    }
+
+    if (ngx_http_upstream_test_next(r, u) == NGX_OK) {
+        return;
+    }
+
+    if (ngx_http_upstream_intercept_errors(r, u) == NGX_OK) {
+        return;
+    }
+}
+ /*
+  *nginx提供的头部处理函数，初始化r-&gt;headers_out,后面会分析
+  */
+
+if (ngx_http_upstream_process_headers(r, u) != NGX_OK) {
+    return;
+}
+
+/*
+  *subrequest_in_memory默认为0,以固定缓存向下游转发会进入下面的函数
+  */
+if (!r-&gt;subrequest_in_memory) {
+/*向client发送响应*/
+    ngx_http_upstream_send_response(r, u);
+    return;
+}
+
+/*下面是子请求的相关处理，暂时不看*/
+/* subrequest content in memory */
+....
+}
+</pre></div>
+
+
+<h2 id="38b56af2136744f9031780a960940d42">2 再分别说下上面提到的几个函数</h2>
+<p>&emsp;&emsp;U-&gt;process_header,书中有例子，其实是参照proxy模块写的。</p>
+<div class="codehilite"><pre>static ngx_int_t my_process_status_line(ngx_http_request_t *r)
+{
+ctx = ngx_http_get_module_ctx(r, ngx_http_my_proxy_module);
+　　u = r-&gt;upstream;
+/*
+ *处理返回的状态行，就是返回的头部的第一行，像是 HTTP/1.1 200 OK之类
+ */
+rc = ngx_http_parse_status_line(r, &amp;u-&gt;buffer, &amp;ctx-&gt;status);
+
+.....
+
+/*
+ *设置状态码
+ */
+if (u-&gt;state) {
+    u-&gt;state-&gt;status = ctx-&gt;status.code;
+}
+
+u-&gt;headers_in.status_n = ctx-&gt;status.code;
+
+len = ctx-&gt;status.end - ctx-&gt;status.start;
+
+u-&gt;headers_in.status_line.len = len;
+
+u-&gt;headers_in.status_line.data = ngx_pnalloc(r-&gt;pool, len);
+if (u-&gt;headers_in.status_line.data == NULL) {
+    return NGX_ERROR;
+}
+
+ngx_memcpy(u-&gt;headers_in.status_line.data, ctx-&gt;status.start, len);
+
+......
+
+u-&gt;process_header = my_proxy_process_header;
+
+
+/*
+ *处理包头的剩余部分
+ */
+return my_proxy_process_header(r);
+}
+</pre></div>
+
+
+<h2 id="eccbc87e4b5ce2fe28308fd9f2a7baf3">3</h2>
+<div class="codehilite"><pre>static ngx_int_t
+my_proxy_process_header(ngx_http_request_t *r)
+{
+
+....
+
+/*一行一行的解析接收到的包头*/
+for ( ;; ) {
+
+/*
+ *所有从上游发回来的数据时存在buffer里的
+ */
+    rc = ngx_http_parse_header_line(r, &amp;r-&gt;upstream-&gt;buffer, 1);
+
+    if (rc == NGX_OK) {
+/*
+ *从链表里取出一个元素
+ */ 
+        h = ngx_list_push(&amp;r-&gt;upstream-&gt;headers_in.headers);
+        if (h == NULL) {
+            return NGX_ERROR;
+        }
+        /*
+         做hash有什么用？其实下面就能看到它的用处。
+         http的包头可以看成是简单的key:value结构，
+         Nginx的headers_in是个通用的结构，通过对接收到的key做哈希，然后与  自己支持的包头类型的哈希值比较，如果一样，就将对应的value赋值给  
+         headers_in中相应的结构，对headers_out的赋值也是如此。下面会看到     upstream有个专门的静态数组，提供对headers_in headers_out赋值的作用
+        */
+
+        h-&gt;hash = r-&gt;header_hash;
+
+        h-&gt;key.len = r-&gt;header_name_end - r-&gt;header_name_start;
+        h-&gt;value.len = r-&gt;header_end - r-&gt;header_start;
+　　      
+        /*不太明白为什么重新申请了内存，直接用buffer的内存，指针指过去不就行了，还能节省内存？？？不明白这样的意图。不过，后面的对headers_in/out中的字段的赋值，都是指针形式的。
+　　      */
+        h-&gt;key.data = ngx_pnalloc(r-&gt;pool,
+                           h-&gt;key.len + 1 + h-&gt;value.len + 1 + h-&gt;key.len);
+        if (h-&gt;key.data == NULL) {
+            return NGX_ERROR;
+        }
+
+        h-&gt;value.data = h-&gt;key.data + h-&gt;key.len + 1;
+        h-&gt;lowcase_key = h-&gt;key.data + h-&gt;key.len + 1 + h-&gt;value.len +1;
+
+        ngx_memcpy(h-&gt;key.data, r-&gt;header_name_start, h-&gt;key.len);
+        h-&gt;key.data[h-&gt;key.len] = &#39;\0&#39;;
+        ngx_memcpy(h-&gt;value.data, r-&gt;header_start, h-&gt;value.len);
+        h-&gt;value.data[h-&gt;value.len] = &#39;\0&#39;;
+        /*统一用小写，才能做哈希啊。*/
+        if (h-&gt;key.len == r-&gt;lowcase_index) {
+            ngx_memcpy(h-&gt;lowcase_key, r-&gt;lowcase_header, h-&gt;key.len);
+
+        } else {
+            ngx_strlow(h-&gt;lowcase_key, h-&gt;key.data, h-&gt;key.len);
+        }
+
+        hh = ngx_hash_find(&amp;umcf-&gt;headers_in_hash, h-&gt;hash,
+                           h-&gt;lowcase_key, h-&gt;key.len);
+        /*
+　   　   Hanler是对根据预先指定的规则，对headers_in的结构体初始化。
+　   　   还有 后面会出现的一个copy_headler，具体分析放在后面一块说。
+        */
+        if (hh &amp;&amp; hh-&gt;handler(r, h, hh-&gt;offset) != NGX_OK) {
+            return NGX_ERROR;
+        }
+
+    ......
+        continue;
+    }
+
+    if (rc == NGX_HTTP_PARSE_HEADER_DONE) {
+
+        /*整个头部处理完毕，下面处理一些特殊情况*/
+
+        if (r-&gt;upstream-&gt;headers_in.server == NULL) {
+            ....
+            /*如果返回中没有server头 。。。*/
+        }
+
+        if (r-&gt;upstream-&gt;headers_in.date == NULL) {
+            .....
+            /*如果没有date头 。。。*/
+        }
+
+        /* clear content length if response is chunked */
+
+        u = r-&gt;upstream;
+        /*处理chunk编码，nginx有一个ngx_http_chunked_filter_module过滤模块，是专门处理chunk编码的*/
+        if (u-&gt;headers_in.chunked) {
+            u-&gt;headers_in.content_length_n = -1;
+        }
+
+        /*
+         * set u-&gt;keepalive if response has no body; this allows to keep
+         * connections alive in case of r-&gt;header_only or X-Accel-Redirect
+         */
+.......
+    }
+    /*没有处理完毕，还需要接收更多的头部，只有遇到两个连续的\r\n，说明头部结束*/
+    if (rc == NGX_AGAIN) {
+        return NGX_AGAIN;
+    }
+</pre></div>
+
+
+<p>......
+    }</p>
+<h2 id="a87ff679a2f3e71d9181a67b7542122c">4</h2>
+<p>&emsp;&emsp;upstream接收到上游返回的数据后，先调用模块实现的 <em>process_hedaer</em>，主要是进行一些解析header，初始化headers_in的工作，然后就调用 ngx_http_upstream_process_headers ，主要用于初始化headers_out。下面看详细内容</p>
+<div class="codehilite"><pre>static ngx_int_t
+ngx_http_upstream_process_headers(ngx_http_request_t *r, ngx_http_upstream_t *u)
+{
+.....
+umcf = ngx_http_get_module_main_conf(r, ngx_http_upstream_module);
+
+/*这个东西没有看，偷懒了，因为要实现的功能不需要这个东西。。。。。*/
+if (u-&gt;headers_in.x_accel_redirect
+    &amp;&amp; !(u-&gt;conf-&gt;ignore_headers &amp; NGX_HTTP_UPSTREAM_IGN_XA_REDIRECT))
+{
+ ......
+}
+
+part = &amp;u-&gt;headers_in.headers.part;
+h = part-&gt;elts;
+
+for (i = 0; /* void */; i++) {
+
+    if (i &gt;= part-&gt;nelts) {
+        if (part-&gt;next == NULL) {
+            break;
+        }
+
+        part = part-&gt;next;
+        h = part-&gt;elts;
+        i = 0;
+    }
+/*这里又做了哈希。是什么功能？
+Nginx提供了一个功能，在配置文件里配置hide_headers 指定相应的http头部，就会在向下游返回包头时隐藏该项，即不对headers_out赋值
+*/
+    if (ngx_hash_find(&amp;u-&gt;conf-&gt;hide_headers_hash, h[i].hash,
+                      h[i].lowcase_key, h[i].key.len))
+    {
+    /*不对headers_out赋值，继续下一行*/
+        continue;
+    }
+
+    hh = ngx_hash_find(&amp;umcf-&gt;headers_in_hash, h[i].hash,
+                       h[i].lowcase_key, h[i].key.len);
+
+    if (hh) {
+        /*好吧，这里看到了copy_handler。下面具体分析*/
+        if (hh-&gt;copy_handler(r, &amp;h[i], hh-&gt;conf) != NGX_OK) {
+            ngx_http_upstream_finalize_request(r, u,
+                                           NGX_HTTP_INTERNAL_SERVER_ERROR);
+            return NGX_DONE;
+        }
+
+        continue;
+    }
+
+    if (ngx_http_upstream_copy_header_line(r, &amp;h[i], 0) != NGX_OK) {
+        ngx_http_upstream_finalize_request(r, u,
+                                           NGX_HTTP_INTERNAL_SERVER_ERROR);
+        return NGX_DONE;
+    }
+}
+
+if (r-&gt;headers_out.server &amp;&amp; r-&gt;headers_out.server-&gt;value.data == NULL)   
+{
+    r-&gt;headers_out.server-&gt;hash = 0;
+}
+
+if (r-&gt;headers_out.date &amp;&amp; r-&gt;headers_out.date-&gt;value.data == NULL) {
+    r-&gt;headers_out.date-&gt;hash = 0;
+}
+
+r-&gt;headers_out.status = u-&gt;headers_in.status_n;
+r-&gt;headers_out.status_line = u-&gt;headers_in.status_line;
+
+r-&gt;headers_out.content_length_n = u-&gt;headers_in.content_length_n;
+
+u-&gt;length = u-&gt;headers_in.content_length_n;
+
+return NGX_OK;
+}
+</pre></div>
+
+
+<h2 id="e4da3b7fbbce2345d7772b0674a318d5">5</h2>
+<p>在ngx_http_upstream.c中有一个数组，ngx_http_upstream_header_t ngx_http_upstream_headers_in[]；
+　　
+ngx_http_upstream_header_t结构体的定义如下。</p>
+<div class="codehilite"><pre>typedef struct {
+/*通过name做hash*/
+ngx_str_t                        name;
+/*通过handler对headers_in赋值*/
+ngx_http_header_handler_pt       handler;
+/*offset conf都是便宜，下面具体例子会明白是什么意思了*/
+ngx_uint_t                       offset;
+/*通过copy_handler对headers_out赋值*/
+ngx_http_header_handler_pt       copy_handler;
+ngx_uint_t                       conf;
+/*这个redirect的用途不是很明确。。暂时还没有看到它的用法*/
+ngx_uint_t                       redirect;  
+} ngx_http_upstream_header_t;
+
+闲言碎语不要讲了，数组中很多成员，没法一一讲解，拿其中一个当栗子吧。其实，很多是重复的。一个明白了，其他就都明白了。
+拿这个当栗子吧：
+
+{ ngx_string(“Date”),
+ngx_http_upstream_process_header_line,
+offsetof(ngx_http_upstream_headers_in_t, date),
+ngx_http_upstream_copy_header_line,
+offsetof(ngx_http_headers_out_t, date), 0 }
+
+
+/*
+这是一个通用的handler方法，会看到很多成员用到了这个函数
+其实很显然，就是通过偏移取到相应字段的位置，对其赋值
+ */
+
+static ngx_int_t
+ngx_http_upstream_process_header_line(ngx_http_request_t *r, ngx_table_elt_t *h,ngx_uint_t offset)
+{
+ngx_table_elt_t  **ph;
+ph = (ngx_table_elt_t **) ((char *) &amp;r-&gt;upstream-&gt;headers_in + offset);
+
+if (*ph == NULL) {
+    *ph = h;
+}
+
+return NGX_OK;
+}
+
+/*好吧，这个又是个通用的函数，很多成员都用了
+跟上边的那个差不多，不说了吧。
+*/
+
+static ngx_int_t
+ngx_http_upstream_copy_header_line(ngx_http_request_t *r, ngx_table_elt_t *h,ngx_uint_t offset)
+{
+ngx_table_elt_t  *ho, **ph;
+
+ho = ngx_list_push(&amp;r-&gt;headers_out.headers);
+if (ho == NULL) {
+    return NGX_ERROR;
+}
+
+ *ho = *h;
+
+if (offset) {
+    ph = (ngx_table_elt_t **) ((char *) &amp;r-&gt;headers_out + offset);
+    *ph = ho;
+}
+
+return NGX_OK;
+}
+</pre></div>
+
+
+<p>&emsp;上面两个都是通用的处理方法，就是直接复制，不需要做特殊处理，可以看到还有一些成员需要特殊设置，比如有ignore rewrite等。其实，分不同情况的原因就是，nginx需要对一些头部做一些特殊处理，所以，可以根据自己的一些特殊需求对上述函数做一些修改。
+　　
+好了，接收的部分差不多了，下一次再说向客户端回传的部分，顺便说一下过滤模块的东西。大家，晚安！！！</p>
+    </div><div id="content-comments"><!-- Duoshuo Comment BEGIN -->
+<div class="ds-thread"></div>
+<script type="text/javascript">
+    var duoshuoQuery = {short_name:"atime-me"};
+(function() {
+ var ds = document.createElement('script');
+ ds.type = 'text/javascript';ds.async = true;
+ ds.src = 'http://static.duoshuo.com/embed.js';
+ ds.charset = 'UTF-8';
+ (document.getElementsByTagName('head')[0] 
+  || document.getElementsByTagName('body')[0]).appendChild(ds);
+ })();
+</script>
+<!-- Duoshuo Comment END --></div>
+</div>
+<div id="niu2-right-container" class="col-md-3">
+<div id="niu2-sidebar-meta" class="niu2-sidebar">
+    <div class="niu2-sidebar-label"><i class="fa fa-calendar"></i>发布时间:</div>
+    <div class="niu2-sidebar-value">2014-04-01 10:56:27</div>
+<div class="niu2-sidebar-label"><i class="fa fa-open-folder"></i>分类:</div>
+    <div class="niu2-sidebar-value"><a href="http://flankersky.com/nginx/index.html">nginx</a></div><div class="niu2-sidebar-label"><i class="fa fa-tag"></i>标签:</div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/linux.html">linux</a></div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/kernel.html">kernel</a></div></div>
+
+<div id="niu2-sidebar-toc" class="niu2-sidebar" data-status="closed"><div class="niu2-sidebar-label">
+        <i id="niu2-sidebar-toc-ctrl" class="fa fa-plus"></i>目录
+    </div>
+    <ol id="niu2-sidebar-toc-list">
+        <li><a href="#content-heading">nginx中的upstream相关(2)：上游响应的接收</a></li>
+        <li><a href='#c4ca4238a0b923820dcc509a6f75849b'>1</a></li><li><a href='#38b56af2136744f9031780a960940d42'>2 再分别说下上面提到的几个函数</a></li><li><a href='#eccbc87e4b5ce2fe28308fd9f2a7baf3'>3</a></li><li><a href='#a87ff679a2f3e71d9181a67b7542122c'>4</a></li><li><a href='#e4da3b7fbbce2345d7772b0674a318d5'>5</a></li><li><a href="#content-comments">评论</a></li></ol></div>
+</div></div><div id="body-footer" class="col-md-6 col-md-offset-2"><div class="niu2-footer">
+    <hr/>
+	<p>
+		Powered by <a href="https://github.com/getpelican/pelican">Pelican</a>,
+		©flankersky 
+2014				
+		<a href="http://www.miitbeian.gov.cn">苏ICP备13060073</a>
+        | 			<a href="/about.html" title="about me">关于</a></p>
+    <p class="niu2-icons"></p>
+</div></div><script type="text/javascript">
+	      var _gaq = _gaq || [];
+	      _gaq.push(['_setAccount', 'UA-45005256-1']);
+	      _gaq.push(['_trackPageview']);
+	
+	      (function() {
+	        var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+	        ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+	        var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+	      })();
+	    </script><!-- Include all compiled plugins (below), or include individual files as needed -->
+<script type="text/javascript" src="http://flankersky.com/theme/js/jquery-1.11.0.min.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/niu2.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/bootstrap.min.js"></script>
+
+<script type="text/javascript">
+    onContentLoaded();    </script>
+  </body>
+</html>

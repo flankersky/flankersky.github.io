@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>一个netif_receive_skb引发的死锁 - flanker's sky</title>
+    <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/bootstrap.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/niu2.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/custom.css" type="text/css" />
+<link rel="stylesheet" href="http://flankersky.com/theme/css/pygments/github.css" type="text/css" />    
+    <script type="text/javascript">
+        window.onload = function() {
+        };
+    </script>
+    <!-- HTML5 shim and Respond.js IE8 support of HTML5 elements and media queries -->
+    <!--[if lt IE 9]>
+        <script src="http://flankersky.com/theme/js/html5shiv.js"></script>
+        <script src="http://flankersky.com/theme/js/respond.min.js"></script>
+    <![endif]-->
+    <!--[if IE 7]>
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome-ie7.min.css" type="text/css" />
+    <![endif]--></head>
+  <body> 
+    <div id="body-header"><div class="navbar navbar-inverse navbar-fixed-top">
+<div class="col-md-12">
+    <div class="navbar-header">
+        <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+        </button>
+        <a class="navbar-brand" href="http://flankersky.com">
+            <i class="fa fa-home"></i>flanker's sky
+        </a>
+    </div>
+	<nav class="collapse navbar-collapse bs-navbar-collapse" role="navigation">
+		<ul class="nav navbar-nav"><li><a href="/about.html" title="about me">
+			    <i class="fa fa-anchor"></i>关于</a>
+			</li><!-- category dropdown list -->
+		<li class="dropdown">
+           <a href="#" class="dropdown-toggle" data-toggle="dropdown">
+                <i class="fa fa-folder-open"></i>分类<b class="caret"></b>
+           </a>
+           <ul class="dropdown-menu"><li><a href="http://flankersky.com/linux/index.html"><i class="fa fa-folder-close"></i>linux                      (4)</a></li><li><a href="http://flankersky.com/nginx/index.html"><i class="fa fa-folder-close"></i>nginx                      (3)</a></li><li><a href="http://flankersky.com/windows/index.html"><i class="fa fa-folder-close"></i>windows                      (4)</a></li></ul>
+        </li>
+        <!--  self defined dropdown list --></ul>
+        
+        <!-- right nav bar -->
+		<ul class="nav navbar-nav navbar-right">
+		<!-- google custom search --></ul>
+	</nav>
+</div>
+</div></div>
+    
+    <div id="body-content"><div class="col-md-8 col-md-offset-2"><h1 id="content-heading">一个netif_receive_skb引发的死锁</h1></div>
+<div id="niu2-left-container" class="col-md-6 col-md-offset-2">
+    <div id="niu2-main-content">
+        <p>【文章迁移自本人CU论坛】</p>
+<p>&emsp;&emsp;项目开发中遇到一个内核死锁的问题，无奈在论坛发帖求助，现在看来，问题基本得到解决，明天长时间
+测试下看看。现在我把该问题总结下，帮助自己深入学习，也希望能帮到其他人。</p>
+<p>问题贴见：<a href="http://bbs.chinaunix.net/thread-4103903-1-1.html">http://bbs.chinaunix.net/thread-4103903-1-1.html</a></p>
+<p>下面是出错时的信息，程序是在vmware里跑的，通过串口输出的信息，信息应该还算完整。</p>
+<div class="codehilite"><pre>[ 3182.546342] BUG: soft lockup - CPU#0 stuck for 22s! [KksTx:2742]  ----&lt;1&gt;
+
+[ 3182.547942] Modules linked in: kksfilter(O)  e1000e(O) vmhgfs(O) vsock(O) ----&lt;2&gt; 
+acpiphp vmwgfx  ttm drm snd_ens1371 gameport snd_ac97_codec ac97_bus snd_pcm vmw_balloon snd_seq_midi snd_rawmidi snd_seq_midi_event psmouse snd_seq serio_raw snd_timer snd_seq_device snd joydev soundcore snd_page_alloc bnep rfcomm bluetooth parport_pc ppdev vmci(O) shpchp mac_hid i2c_piix4 lp parport usbhid hid floppy mptspi mptscsih mptbase vmxnet(O) vmw_pvscsi vmxnet3 [last unloaded: e1000e]
+
+[ 3182.560267] irq event stamp: 0
+[ 3182.561060] hardirqs last enabled at (0): [&lt; (null)&gt;] (null)
+[ 3182.562649] hardirqs last disabled at (0): [] copy_process+0x484/0x1170
+[ 3182.564637] softirqs last enabled at (0): [] copy_process+0x484/0x1170
+[ 3182.566563] softirqs last disabled at (0): [&lt; (null)&gt;] (null)
+[ 3182.568115] Modules linked in: kksfilter(O) e1000e(O) vmhgfs(O) vsock(O) acpiphp vmwgfx ttm drm snd_ens1371 gameport snd_ac97_codec ac97_bus snd_pcm vmw_balloon snd_seq_midi snd_rawmidi snd_seq_midi_event psmouse snd_seq serio_raw snd_timer snd_seq_device snd joydev soundcore snd_page_alloc bnep rfcomm bluetooth parport_pc ppdev vmci(O) shpchp mac_hid i2c_piix4 lp parport usbhid hid floppy mptspi mptscsih mptbase vmxnet(O) vmw_pvscsi vmxnet3 [last unloaded: e1000e]
+[ 3182.580028]
+[ 3182.580431] Pid: 2742, comm: KksTx Tainted: G O 3.2.6 #18 VMware, Inc. VMware Virtual Platform/440BX Desktop Reference Platform
+[ 3182.583631] EIP: 0060:[] EFLAGS: 00000282 CPU: 0
+[ 3182.585043] EIP is at delay_tsc+0x1f/0x70  ----&lt;3&gt;
+[ 3182.586068] EAX: 7170b643 EBX: f0a98d34 ECX: f0a98d34 EDX: 000007db
+[ 3182.587670] ESI: 00000000 EDI: 00000001 EBP: f680dbb4 ESP: f680dba4
+[ 3182.589252] DS: 007b ES: 007b FS: 00d8 GS: 00e0 SS: 0068
+[ 3182.590632] Process KksTx (pid: 2742, ti=f680c000 task=e604ea80 task.ti=f4de6000)
+[ 3182.592516] Stack:
+[ 3182.593046] 7170b5d7 f0a98d34 280c08d0 00000000 f680dbbc c12ba62e f680dbdc c12c150b
+[ 3182.595284] 00000001 a087b7e8 00000001 f0a98d34 c1e896c0 f0a98d00 f680dbf8 c159eefd
+[ 3182.597516] 00000000 00000002 00000000 c14f6f2a f4c91600 f680dc4c c14f6f2a 00000050
+[ 3182.599751] Call Trace:
+[ 3182.600390] [] __delay+0xe/0x10
+[ 3182.601454] [] do_raw_spin_lock+0xab/0xf0
+[ 3182.602706] [] _raw_spin_lock_nested+0x3d/0x50
+[ 3182.604087] [] ? tcp_v4_rcv+0x76a/0xaa0
+[ 3182.605285] [] tcp_v4_rcv+0x76a/0xaa0
+[ 3182.606451] [] ip_local_deliver_finish+0xdf/0x380
+[ 3182.607866] [] ? ip_local_deliver_finish+0x3c/0x380
+[ 3182.609318] [] ip_local_deliver+0x7f/0x90
+[ 3182.610578] [] ip_rcv_finish+0x16e/0x560
+[ 3182.611804] [] ip_rcv+0x25a/0x320
+[ 3182.612880] [] ? inet_del_protocol+0x30/0x30
+[ 3182.614193] [] __netif_receive_skb+0x4c2/0x570
+[ 3182.615547] [] ? __netif_receive_skb+0xdc/0x570
+[ 3182.616918] [] netif_receive_skb+0xcb/0xe0
+[ 3182.618187] [] ? netif_receive_skb+0x1f/0xe0
+[ 3182.619517] [] SendSkb2Middle+0x162/0x176 [kksfilter]
+[ 3182.621019] [] KksNatHandler+0x612/0x86d [kksfilter]
+[ 3182.622516] [] ? sscanf+0x11/0x14
+[ 3182.623592] [] ? kks_inet_addr+0x37/0x4f [kksfilter]
+[ 3182.625069] [] kks_rx+0x4e/0xb9 [kksfilter]
+[ 3182.626362] [] hook_local_in+0x111/0x1d7 [kksfilter]
+[ 3182.627838] [] ? inet_del_protocol+0x30/0x30
+[ 3182.629145] [] nf_iterate+0x63/0x90
+[ 3182.630274] [] ? inet_del_protocol+0x30/0x30
+[ 3182.631582] [] nf_hook_slow+0x92/0x150
+[ 3182.632761] [] ? inet_del_protocol+0x30/0x30
+[ 3182.634069] [] ip_rcv+0x24a/0x320
+[ 3182.635155] [] ? inet_del_protocol+0x30/0x30
+[ 3182.636465] [] __netif_receive_skb+0x4c2/0x570
+[ 3182.638624] [] ? __netif_receive_skb+0xdc/0x570
+[ 3182.639996] [] netif_receive_skb+0xcb/0xe0
+[ 3182.641250] [] ? netif_receive_skb+0x1f/0xe0
+[ 3182.642564] [] napi_skb_finish+0x37/0x50
+[ 3182.643781] [] napi_gro_receive+0xa1/0xb0
+[ 3182.645060] [] e1000_receive_skb+0xc6/0x170 [e1000e]
+[ 3182.646577] [] ? __kfree_skb+0x3d/0x90
+[ 3182.647779] [] e1000_clean_rx_irq+0x206/0x340 [e1000e]
+[ 3182.649419] [] e1000e_poll+0x64/0x2d0 [e1000e]
+[ 3182.650768] [] net_rx_action+0x12d/0x240
+[ 3182.651988] [] ? local_bh_enable+0xd0/0xd0
+[ 3182.653245] [] __do_softirq+0x99/0x1d0
+[ 3182.654429] [] ? local_bh_enable+0xd0/0xd0
+[ 3182.655688] [ 3182.656264] [] ? irq_exit+0x7e/0xa0
+[ 3182.657406] [] ? do_IRQ+0x4b/0xc0
+[ 3182.658496] [] ? common_interrupt+0x35/0x3c
+[ 3182.659796] [] ? tcp_connect+0x318/0x490     -------&lt;4&gt;
+[ 3182.661011] [] ? tcp_validate_incoming+0x71/0x340
+[ 3182.662421] [] ? tcp_check_req+0x260/0x4b0
+[ 3182.663676] [] ? tcp_rcv_state_process+0x47/0xb80
+[ 3182.665078] [] ? tcp_check_req+0x2e3/0x4b0
+[ 3182.666338] [] ? tcp_child_process+0x8d/0x150
+[ 3182.667660] [] ? tcp_v4_do_rcv+0x2aa/0x3c0
+[ 3182.668922] [] ? do_raw_spin_lock+0x3b/0xf0
+[ 3182.670202] [] ? _raw_spin_lock_nested+0x3d/0x50
+[ 3182.671603] [] ? tcp_v4_rcv+0x78a/0xaa0
+[ 3182.672800] [] ? ip_local_deliver_finish+0xdf/0x380
+[ 3182.674263] [] ? ip_local_deliver_finish+0x3c/0x380
+[ 3182.675713] [] ? ip_local_deliver+0x7f/0x90
+[ 3182.676991] [] ? ip_rcv_finish+0x16e/0x560
+[ 3182.678259] [] ? ip_rcv+0x25a/0x320
+[ 3182.679371] [] ? inet_del_protocol+0x30/0x30
+[ 3182.680670] [] ? __netif_receive_skb+0x4c2/0x570
+[ 3182.682057] [] ? __netif_receive_skb+0xdc/0x570
+[ 3182.683436] [] ? netif_receive_skb+0xcb/0xe0
+[ 3182.684730] [] ? netif_receive_skb+0x1f/0xe0
+[ 3182.686027] [] ? SendSkb2Middle+0x162/0x176 [kksfilter]
+[ 3182.687568] [] ? KksNatHandler+0x6cd/0x86d [kksfilter]
+[ 3182.689094] [] ? futex_wait_requeue_pi+0x1c0/0x380
+[ 3182.690526] [] ? kks_tx+0x60/0x81 [kksfilter]
+[ 3182.691859] [] ? KksNatHandler+0x86d/0x86d [kksfilter]
+[ 3182.693386] [] ? kthread+0x78/0x80
+[ 3182.694488] [] ? __init_kthread_worker+0x60/0x60
+[ 3182.695876] [] ? kernel_thread_helper+0x6/0x10
+</pre></div>
+
+
+<p>先说明一下oops信息怎么看，先看出错的大致原因。</p>
+<p>&lt;1&gt;处表明这是soft lockup，一般就是指死锁，看门狗抛出异常。</p>
+<p>&lt;2&gt;表明出错的是在哪个模块（如果出错是在模块里的话），</p>
+<p>&lt;3&gt;EIP 是出错的指令地址，也就是在哪个函数上出错的，但通常用处不大（个人感觉）。。</p>
+<p>知道了是死锁，那就继续查找死锁发生在哪个地方。就是看下面的call trace了，call trace 是函数
+调用栈的意思。顾名思义，就是内核崩溃前的函数调用情况。call trace的阅读的大致原则是从下往上看(栈)。首先，代码从最下往上执行，执行到<span style="color: #ff0000;">&lt;4&gt; <span style="color: #000000;">的时候被一个irq（中断给中断掉了。）然后上面就是中断后的函数调用。由此便可以猜测，是我写的代码跟系统正常的中断产生了资源竞争。</span></span></p>
+<p>具体分析：
+   kks_tx是内核的一个线程，这个线程直接调用了netif_receive_skb，然后再进入 tcp_v4_rcv时获得
+了一个自旋锁，但是在释放锁之前，被网络数据的软中断给中断掉了（也就是红色上方的那些信息）,中断例程也执行了netif_receive_skb，再次等待同一个自旋锁，所以造成了死锁。</p>
+<p>刚开始，迷惑不解是因为对LDD3中的一句话没有理解清楚，获得自旋锁之后会禁止中断
+，如果禁止中断了，肯定就不会死锁了。但其实是自己记错了，单纯的spin_lock是不会禁止中断的，只有spin_lock_irq 和 spin_lock_bh会禁止中断，前者是禁止所有中断，后者只是禁止软中断。所以，查看了tcp_v4_rcv中的自旋锁，果然是没有禁止中断的，所以问题就出现在这个锁。但是，为什么系统中调用netif_receive_skb时为什么没有出现死锁的情况呢？原因是就在do_softirq中，</p>
+<div class="codehilite"><pre>asmlinkage void do_softirq(void)
+{
+
+__u32 pending;
+unsigned long flags;
+
+// 这个函数判断，如果当前有硬件中断嵌套，或者
+// 有软中断正在执行时候，则马上返回。
+if (in_interrupt())
+
+return;
+// 关中断
+local_irq_save(flags);
+
+// 判断是否有 pending 的软中断需要处理。
+pending = local_softirq_pending();
+
+// 如果有则调用 __do_softirq() 进行实际处理
+
+if (pending)
+
+__do_softirq();
+
+// 开中断继续执行
+
+local_irq_restore(flags);
+
+}
+</pre></div>
+
+
+<p>刚开始看到这段代码以为是关掉中断的原因，但是，后来一想， 函数 local_irq_save是关掉所有中断
+(包括硬中断，废话)。这样，肯定会出现问题，因为上面的netif_receive_skb会耗费很长时间，不可能关闭全部中断。所以继续看__do_softirq();</p>
+<p>摘录一段高手对__do_softirq()的注释，地址：
+   <a href="http://linux.ccidnet.com/art/741/20070612/1110075_1.html" title="http://linux.ccidnet.com/art/741/20070612/1110075_1.html">http://linux.ccidnet.com/art/741/20070612/1110075_1.html</a></p>
+<div class="codehilite"><pre>// do_IRQ 函数执行完硬件 ISR 后退出时调用此函数。
+
+void irq_exit(void)
+{
+
+account_system_vtime(current);
+
+trace_hardirq_exit();
+
+sub_preempt_count(IRQ_EXIT_OFFSET);
+//
+// 判断当前是否有硬件中断嵌套，并且是否有软中断在
+// pending 状态，注意：这里只有两个条件同时满足
+// 时，才有可能调用 do_softirq() 进入软中断。也就是
+// 说确认当前所有硬件中断处理完成，且有硬件中断安装了
+// 软中断处理时理时才会进入。
+//
+if (!in_interrupt() &amp;amp;&amp;amp; local_softirq_pending())
+
+//
+// 其实这里就是调用 do_softirq() 执行
+//
+invoke_softirq();
+preempt_enable_no_resched();
+}
+
+#ifndef __ARCH_HAS_DO_SOFTIRQ
+
+
+
+asmlinkage void do_softirq(void)
+{
+__u32 pending;
+unsigned long flags;
+//
+// 这个函数判断，如果当前有硬件中断嵌套，或者
+// 有软中断正在执行时候，则马上返回。在这个
+// 入口判断主要是为了与 ksoftirqd 互斥。
+//
+if (in_interrupt())
+
+return;
+
+//
+// 关中断执行以下代码
+//
+local_irq_save(flags);
+//
+// 判断是否有 pending 的软中断需要处理。
+//
+pending = local_softirq_pending();
+//
+
+// 如果有则调用 __do_softirq() 进行实际处理
+//
+if (pending)
+__do_softirq();
+//
+// 开中断继续执行
+//
+local_irq_restore(flags);
+}
+
+//
+// 最大软中断调用次数为 10 次。
+//
+#define MAX_SOFTIRQ_RESTART 10
+asmlinkage void __do_softirq(void)
+{
+//
+// 软件中断处理结构，此结构中包括了 ISR 中
+// 注册的回调函数。
+//
+struct softirq_action *h;
+__u32 pending;
+int max_restart = MAX_SOFTIRQ_RESTART;
+int cpu;
+//
+// 得到当前所有 pending 的软中断。
+//
+
+pending = local_softirq_pending();
+
+account_system_vtime(current);
+
+//
+// 执行到这里要屏蔽其他软中断，这里也就证明了
+// 每个 CPU 上同时运行的软中断只能有一个。
+//
+__local_bh_disable((unsigned long)__builtin_return_address(0));
+
+trace_softirq_enter();
+
+// 针对 SMP 得到当前正在处理的 CPU
+//
+cpu = smp_processor_id();
+//
+// 循环标志
+//
+restart:
+
+//
+// 每次循环在允许硬件 ISR 强占前，首先重置软中断
+// 的标志位。
+//
+
+/* Reset the pending bitmask before enabling irqs */
+
+set_softirq_pending(0);
+
+// 到这里才开中断运行，注意：以前运行状态一直是关中断
+// 运行，这时当前处理软中断才可能被硬件中断抢占。也就
+// 是说在进入软中断时不是一开始就会被硬件中断抢占。只有
+// 在这里以后的代码才可能被硬件中断抢占。
+//
+local_irq_enable();
+
+//
+// 这里要注意，以下代码运行时可以被硬件中断抢占，但
+// 这个硬件 ISR 执行完成后，它的所注册的软中断无法马上运行，
+// 别忘了，现在虽是开硬件中断执行，但前面的 __local_bh_disable()
+// 函数屏蔽了软中断。所以这种环境下只能被硬件中断抢占，但这
+// 个硬中断注册的软中断回调函数无法运行。要问为什么，那是因为
+// __local_bh_disable() 函数设置了一个标志当作互斥量，而这个
+// 标志正是上面的 irq_exit() 和 do_softirq() 函数中的
+// in_interrupt() 函数判断的条件之一，也就是说 in_interrupt()
+// 函数不仅检测硬中断而且还判断了软中断。所以在这个环境下触发
+// 硬中断时注册的软中断，根本无法重新进入到这个函数中来，只能
+// 是做一个标志，等待下面的重复循环（最大 MAX_SOFTIRQ_RESTART）
+// 才可能处理到这个时候触发的硬件中断所注册的软中断。
+//
+//
+// 得到软中断向量表。
+//
+h = softirq_vec;
+//
+// 循环处理所有 softirq 软中断注册函数。
+//
+
+do {
+
+// 如果对应的软中断设置 pending 标志则表明
+// 需要进一步处理它所注册的函数。
+//
+if (pending &amp;amp; 1) {
+//
+// 在这里执行了这个软中断所注册的回调函数。
+//
+action(h);
+
+rcu_bh_qsctr_inc(cpu);
+}
+
+//
+// 继续找，直到把软中断向量表中所有 pending 的软
+// 中断处理完成。
+//
+
+h++;
+//
+
+// 从代码里可以看出按位操作，表明一次循环只
+// 处理 32 个软中断的回调函数。
+//
+pending &amp;gt;&amp;gt;= 1;
+} while (pending);
+//
+// 关中断执行以下代码。注意：这里又关中断了，下面的
+// 代码执行过程中硬件中断无法抢占。
+//
+local_irq_disable();
+//
+// 前面提到过，在刚才开硬件中断执行环境时只能被硬件中断
+// 抢占，在这个时候是无法处理软中断的，因为刚才开中
+// 断执行过程中可能多次被硬件中断抢占，每抢占一次就有可
+// 能注册一个软中断，所以要再重新取一次所有的软中断。
+// 以便下面的代码进行处理后跳回到 restart 处重复执行。
+//
+pending = local_softirq_pending();
+//
+// 如果在上面的开中断执行环境中触发了硬件中断，且每个都
+// 注册了一个软中断的话，这个软中断会设置 pending 位，
+// 但在当前一直屏蔽软中断的环境下无法得到执行，前面提
+// 到过，因为 irq_exit() 和 do_softirq() 根本无法进入到
+// 这个处理过程中来。这个在上面详细的记录过了。那么在
+// 这里又有了一个执行的机会。注意：虽然当前环境一直是
+// 处于屏蔽软中断执行的环境中，但在这里又给出了一个执行
+// 刚才在开中断环境过程中触发硬件中断时所注册的软中断的
+// 机会，其实只要理解了软中断机制就会知道，无非是在一些特
+// 定环境下调用 ISR 注册到软中断向量表里的函数而已。
+//
+
+
+
+//
+// 如果刚才触发的硬件中断注册了软中断，并且重复执行次数
+// 没有到 10 次的话，那么则跳转到 restart 标志处重复以上
+// 所介绍的所有步骤：设置软中断标志位，重新开中断执行...
+// 注意：这里是要两个条件都满足的情况下才可能重复以上步骤。
+if (pending &amp;amp;&amp;amp; --max_restart)
+goto restart;
+
+
+
+//
+// 如果以上步骤重复了 10 次后还有 pending 的软中断的话，
+// 那么系统在一定时间内可能达到了一个峰值，为了平衡这点。
+// 系统专门建立了一个 ksoftirqd 线程来处理，这样避免在一
+// 定时间内负荷太大。这个 ksoftirqd 线程本身是一个大循环，
+// 在某些条件下为了不负载过重，它是可以被其他进程抢占的，
+// 但注意，它是显示的调用了 preempt_xxx() 和 schedule()
+// 才会被抢占和切换的。这么做的原因是因为在它一旦调用
+// local_softirq_pending() 函数检测到有 pending 的软中断
+// 需要处理的时候，则会显示的调用 do_softirq() 来处理软中
+// 断。也就是说，下面代码唤醒的 ksoftirqd 线程有可能会回
+// 到这个函数当中来，尤其是在系统需要响应很多软中断的情况
+// 下，它的调用入口是 do_softirq()，这也就是为什么在 do_softirq()
+// 的入口处也会用 in_interrupt() 函数来判断是否有软中断
+// 正在处理的原因了，目的还是为了防止重入。ksoftirqd 实现
+// 看下面对 ksoftirqd() 函数的分析。
+
+if (pending)
+
+
+// 此函数实际是调用 wake_up_process() 来唤醒 ksoftirqd
+
+wakeup_softirqd();
+
+trace_softirq_exit();
+
+account_system_vtime(current);
+
+// 到最后才开软中断执行环境，允许软中断执行。注意：这里
+// 使用的不是 local_bh_enable()，不会再次触发 do_softirq()
+// 的调用。
+
+_local_bh_enable();
+
+}
+
+static int ksoftirqd(void * __bind_cpu)
+
+{
+// 显示调用此函数设置当前进程的静态优先级。当然，
+
+// 这个优先级会随调度器策略而变化。
+
+set_user_nice(current, 19);
+
+// 设置当前进程不允许被挂启
+
+flags |= PF_NOFREEZE;
+
+// 设置当前进程状态为可中断的状态，这种睡眠状
+// 态可响应信号处理等。
+
+set_current_state(TASK_INTERRUPTIBLE);
+
+// 下面是一个大循环，循环判断当前进程是否会停止，
+// 不会则继续判断当前是否有 pending 的软中断需
+// 要处理。
+
+while (!kthread_should_stop()) {
+
+// 如果可以进行处理，那么在此处理期间内禁止
+// 当前进程被抢占。
+
+preempt_disable();
+
+//
+
+// 首先判断系统当前没有需要处理的 pending 状态的
+// 软中断
+if (!local_softirq_pending()) {
+//
+// 没有的话在主动放弃 CPU 前先要允许抢占，因为
+// 一直是在不允许抢占状态下执行的代码。
+//
+preempt_enable_no_resched();
+//
+// 显示调用此函数主动放弃 CPU 将当前进程放入睡眠队列，
+// 并切换新的进程执行（调度器相关不记录在此）
+//
+schedule();
+//
+// 注意：如果当前显示调用 schedule() 函数主动切换的进
+// 程再次被调度执行的话，那么将从调用这个函数的下一条
+// 语句开始执行。也就是说，在这里当前进程再次被执行的
+// 话，将会执行下面的 preempt_disable() 函数。
+
+// 当进程再度被调度时，在以下处理期间内禁止当前进程
+// 被抢占。
+//
+preempt_disable();
+}
+
+//
+// 设置当前进程为运行状态。注意：已经设置了当前进程不可抢占
+
+// 在进入循环后，以上两个分支不论走哪个都会执行到这里。一是
+// 进入循环时就有 pending 的软中断需要执行时。二是进入循环时
+// 没有 pending 的软中断，当前进程再次被调度获得 CPU 时继续
+// 执行时。
+__set_current_state(TASK_RUNNING);
+
+//
+// 循环判断是否有 pending 的软中断，如果有则调用 do_softirq()
+// 来做具体处理。注意：这里又是一个 do_softirq() 的入口点，
+// 那么在 __do_softirq() 当中循环处理 10 次软中断的回调函数
+// 后，如果还有 pending 的话，会又调用到这里。那么在这里则
+// 又会有可能去调用 __do_softirq() 来处理软中断回调函数。在前
+// 面介绍 __do_softirq() 时已经提到过，处理 10 次还处理不完的
+// 话说明系统正处于繁忙状态。根据以上分析，我们可以试想如果在
+// 系统非常繁忙时，这个进程将会与 do_softirq() 相互交替执行，
+// 这时此进程占用 CPU 应该会很高，虽然下面的 cond_resched()
+// 函数做了一些处理，它在处理完一轮软中断后当前处理进程可能会
+// 因被调度而减少 CPU 负荷，但是在非常繁忙时这个进程仍然有可
+// 能大量占用 CPU。
+//
+
+while (local_softirq_pending()) {
+
+/* Preempt disable stops cpu going offline.
+If already offline, we&amp;#39;ll be on wrong CPU:
+
+don&amp;#39;t process */
+if (cpu_is_offline((long)__bind_cpu))
+
+//
+// 如果当前被关联的 CPU 无法继续处理则跳转
+// 到 wait_to_die 标记出，等待结束并退出。
+//
+
+goto wait_to_die;
+
+//
+// 执行 do_softirq() 来处理具体的软中断回调函数。注
+// 意：如果此时有一个正在处理的软中断的话，则会马上
+// 返回，还记得前面介绍的 in_interrupt() 函数么。
+do_softirq();
+//
+// 允许当前进程被抢占。
+//
+preempt_enable_no_resched();
+//
+// 这个函数有可能间接的调用 schedule() 来切换当前
+// 进程，而且上面已经允许当前进程可被抢占。也就是
+// 说在处理完一轮软中断回调函数时，有可能会切换到
+// 其他进程。我认为这样做的目的一是为了在某些负载
+// 超标的情况下不至于让这个进程长时间大量的占用 CPU，
+// 二是让在有很多软中断需要处理时不至于让其他进程
+// 得不到响应。
+//
+cond_resched();
+//
+// 禁止当前进程被抢占。
+//
+preempt_disable();
+//
+// 处理完所有软中断了吗？没有的话继续循环以上步骤
+//
+}
+//
+// 待一切都处理完成后，允许当前进程被抢占，并设置
+// 当前进程状态为可中断状态，继续循环以上所有过程。
+preempt_enable();
+set_current_state(TASK_INTERRUPTIBLE);
+}
+//
+// 如果将会停止则设置当前进程为运行状态后直接返回。
+// 调度器会根据优先级来使当前进程运行。
+//
+__set_current_state(TASK_RUNNING);
+return 0;
+//
+// 一直等待到当前进程被停止
+//
+wait_to_die:
+//
+// 允许当前进程被抢占。
+//
+preempt_enable();
+
+/* Wait for kthread_stop */
+//
+// 设置当前进程状态为可中断的状态，这种睡眠状
+// 态可响应信号处理等。
+//
+set_current_state(TASK_INTERRUPTIBLE);
+//
+// 判断当前进程是否会被停止，如果不是的话
+// 则设置进程状态为可中断状态并放弃当前 CPU
+// 主动切换。也就是说这里将一直等待当前进程
+// 将被停止时候才结束。
+//
+while (!kthread_should_stop()) {
+schedule();
+set_current_state(TASK_INTERRUPTIBLE);
+}
+//
+// 如果将会停止则设置当前进程为运行状态后直接返回。
+// 调度器会根据优先级来使当前进程运行。
+//
+__set_current_state(TASK_RUNNING);
+return 0;
+}
+</pre></div>
+
+
+<p>可以看出在执行软中断的注册函数之前，是关闭了软中断，但是硬中断是开着的。所以，对于
+netif_receive_skb的问题，暂时想出了两种方法：</p>
+<p>1.在调用netif_receive_skb的上下文中禁止软中断，理论上可行。</p>
+<p>2.直接调用netif_rx，netif_rx是旧接口，是在NAPI之前的网络数据包的处理函数，但是在e1000e的驱
+动里也看到了这个函数，是在禁用NAPI的情况下调用的该函数(估计是为了兼容的原因)，所以这个函数还是可以用的。目前测试看来，没有出现问题。理论上也不会出错，因为netif_rx的作用的是将skb放到了softnet_data-&gt;input_pkt_queue中，之后也会触发软中断来取数据包。所以，综合考虑，直接用netif_rx是比较好的方案。</p>
+<p>PS：虽然天天看网络 内核相关的东西，但是真的发现理解的不深入，大都是一知半解，正真遇到问题才想起来好好看书，不应该啊，不应该。其实很多问题LDD3中都有说明。吸取教训。</p>
+    </div><div id="content-comments"><!-- Duoshuo Comment BEGIN -->
+<div class="ds-thread"></div>
+<script type="text/javascript">
+    var duoshuoQuery = {short_name:"atime-me"};
+(function() {
+ var ds = document.createElement('script');
+ ds.type = 'text/javascript';ds.async = true;
+ ds.src = 'http://static.duoshuo.com/embed.js';
+ ds.charset = 'UTF-8';
+ (document.getElementsByTagName('head')[0] 
+  || document.getElementsByTagName('body')[0]).appendChild(ds);
+ })();
+</script>
+<!-- Duoshuo Comment END --></div>
+</div>
+<div id="niu2-right-container" class="col-md-3">
+<div id="niu2-sidebar-meta" class="niu2-sidebar">
+    <div class="niu2-sidebar-label"><i class="fa fa-calendar"></i>发布时间:</div>
+    <div class="niu2-sidebar-value">2014-04-01 10:51:22</div>
+<div class="niu2-sidebar-label"><i class="fa fa-open-folder"></i>分类:</div>
+    <div class="niu2-sidebar-value"><a href="http://flankersky.com/linux/index.html">linux</a></div><div class="niu2-sidebar-label"><i class="fa fa-tag"></i>标签:</div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/linux.html">linux</a></div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/kernel.html">kernel</a></div></div>
+
+<div id="niu2-sidebar-toc" class="niu2-sidebar" data-status="closed"><div class="niu2-sidebar-label">
+        <i id="niu2-sidebar-toc-ctrl" class="fa fa-plus"></i>目录
+    </div>
+    <ol id="niu2-sidebar-toc-list">
+        <li><a href="#content-heading">一个netif_receive_skb引发的死锁</a></li>
+        <li><a href="#content-comments">评论</a></li></ol></div>
+</div></div><div id="body-footer" class="col-md-6 col-md-offset-2"><div class="niu2-footer">
+    <hr/>
+	<p>
+		Powered by <a href="https://github.com/getpelican/pelican">Pelican</a>,
+		©flankersky 
+2014				
+		<a href="http://www.miitbeian.gov.cn">苏ICP备13060073</a>
+        | 			<a href="/about.html" title="about me">关于</a></p>
+    <p class="niu2-icons"></p>
+</div></div><script type="text/javascript">
+	      var _gaq = _gaq || [];
+	      _gaq.push(['_setAccount', 'UA-45005256-1']);
+	      _gaq.push(['_trackPageview']);
+	
+	      (function() {
+	        var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+	        ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+	        var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+	      })();
+	    </script><!-- Include all compiled plugins (below), or include individual files as needed -->
+<script type="text/javascript" src="http://flankersky.com/theme/js/jquery-1.11.0.min.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/niu2.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/bootstrap.min.js"></script>
+
+<script type="text/javascript">
+    onContentLoaded();    </script>
+  </body>
+</html>

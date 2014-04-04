@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>有关反向路径过滤 - flanker's sky</title>
+    <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/bootstrap.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/niu2.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/custom.css" type="text/css" />
+<link rel="stylesheet" href="http://flankersky.com/theme/css/pygments/github.css" type="text/css" />    
+    <script type="text/javascript">
+        window.onload = function() {
+        };
+    </script>
+    <!-- HTML5 shim and Respond.js IE8 support of HTML5 elements and media queries -->
+    <!--[if lt IE 9]>
+        <script src="http://flankersky.com/theme/js/html5shiv.js"></script>
+        <script src="http://flankersky.com/theme/js/respond.min.js"></script>
+    <![endif]-->
+    <!--[if IE 7]>
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome-ie7.min.css" type="text/css" />
+    <![endif]--></head>
+  <body> 
+    <div id="body-header"><div class="navbar navbar-inverse navbar-fixed-top">
+<div class="col-md-12">
+    <div class="navbar-header">
+        <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+        </button>
+        <a class="navbar-brand" href="http://flankersky.com">
+            <i class="fa fa-home"></i>flanker's sky
+        </a>
+    </div>
+	<nav class="collapse navbar-collapse bs-navbar-collapse" role="navigation">
+		<ul class="nav navbar-nav"><li><a href="/about.html" title="about me">
+			    <i class="fa fa-anchor"></i>关于</a>
+			</li><!-- category dropdown list -->
+		<li class="dropdown">
+           <a href="#" class="dropdown-toggle" data-toggle="dropdown">
+                <i class="fa fa-folder-open"></i>分类<b class="caret"></b>
+           </a>
+           <ul class="dropdown-menu"><li><a href="http://flankersky.com/linux/index.html"><i class="fa fa-folder-close"></i>linux                      (4)</a></li><li><a href="http://flankersky.com/nginx/index.html"><i class="fa fa-folder-close"></i>nginx                      (3)</a></li><li><a href="http://flankersky.com/windows/index.html"><i class="fa fa-folder-close"></i>windows                      (4)</a></li></ul>
+        </li>
+        <!--  self defined dropdown list --></ul>
+        
+        <!-- right nav bar -->
+		<ul class="nav navbar-nav navbar-right">
+		<!-- google custom search --></ul>
+	</nav>
+</div>
+</div></div>
+    
+    <div id="body-content"><div class="col-md-8 col-md-offset-2"><h1 id="content-heading">有关反向路径过滤</h1></div>
+<div id="niu2-left-container" class="col-md-6 col-md-offset-2">
+    <div id="niu2-main-content">
+        <p>&emsp;&emsp;反向路径过滤是linux中路由子系统里的概念。之所以写这个问题，还是因为之前碰到过一个内核里的函数fib_validate_source()，虽然改了里面的代码，但是当时没有看懂代码的意思，所以一直耿耿于怀。最近，静心读了一下《深入理解linux网络技术内幕》中关于邻居子系统、路由子系统的章节，这个问题算是得以解决。下面记录一下学习心得。
+内核代码版本依旧是3.2.6.</p>
+<p>&emsp;&emsp;先说一下事情的起因，即为什么会出现这么奇葩的应用场景。这就要牵扯到一个概念“代理”
+代理分为好几种。普通代理，反向代理，透明代理，简单说下区别。具体的可以问google</p>
+<p>&emsp;&emsp;普通代理，就是经常用的那种，在浏览器里设置之后，就可以实现一些“你懂得”的功能。</p>
+<p>&emsp;&emsp;反向代理，传统的代理是代表客户来访问真正的server；反向代理则是代表真实的server来接受client的访问，通常是起到负载均衡、保护内网(屏障)的作用。</p>
+<h2 id="afb608bd15aec70fab1d80481b791de9">重点说下透明代理。</h2>
+<p>&emsp;&emsp;透明代理，就是让用户“察觉不到”代理服务器的存在。比如，squid、nginx实现透明代理等。但是，也看到一个概念就是透明模式的防火墙与透明代理的防火墙。个人觉得，这是两个不同的概念，透明模式的防火墙类似于透明网桥(废话，网桥当然是透明的)，无IP，包过滤。这样可以隐藏防火墙的存在；但是实现透明代理的防火墙也是无IP的吗？没有找到相关的资料，不是很确定。但个人觉得只是实现了简单的透明代理，类似普通的透明代理服务器。但是，真正无IP的透明代理防护墙能不能实现？个人觉得也是可以的。</p>
+<p>&emsp;&emsp;一般的透明代理服务器真的不会被用户察觉？非也。客户端虽然不需要再浏览器里设置，但是要设置默认网关为代理服务器的IP。如果想实现一个上面提到的无IP的透明代理防火墙呢。这才是真正的透明代理啊。毫无察觉啊。是不是很邪恶，很猥琐。哈哈</p>
+<p>&emsp;&emsp;好吧，以上是代理的相关东西，跟本文题目有关系？我也不清楚，自己想吧。
+具体到代码上，如果我用混杂模式收到了一个数据包，怎么传到上层的应用？正常的协议栈肯定是不会让你上传的，不是开了混杂模式就可以传上去的。很多地方都会对数据包的合法性进行检查。比如，fib_validate_source()这就是其中之一。
+&emsp;&emsp;假设收到的数据包的源IP是192.168.1.100/24 目的是 202.202.202.202/24.我们收到之后，修改目的地址，传到我们自己机器的某一个网卡，比如地址是10.0.0.1/24.这显然不可能传上去的，即使修改了目的地址为本机地址。下面看具体代码：整个的接收流程。</p>
+<div class="codehilite"><pre>/*
+ *  Main IP Receive routine.
+ */
+int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, struct net_device *orig_dev)
+{
+　　......
+     * that it receives, do not try to analyse it.
+     */
+　　/*这个pkt_type标志是在网卡驱动里写入的，意思是这不是发往本机的包，因为MAC地址不对，在ip_rcv能收到这种包，说明开了混杂模式*/
+    if (skb-&gt;pkt_type == PACKET_OTHERHOST)
+        goto drop;
+　　.....
+　　/*netfilter的hook点，执行完netfilter就会执行 ip_rcv_finish*/
+    return NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING, skb, dev, NULL,
+               ip_rcv_finish);
+　　......
+}
+
+static int ip_rcv_finish(struct sk_buff *skb)
+{
+    const struct iphdr *iph = ip_hdr(skb);
+    struct rtable *rt;
+
+    /*
+     *  Initialise the virtual path cache for the packet. It describes
+     *  how the packet travels inside Linux networking.
+     */ /*检查skb中的dst_entry是否存在，dst_entry可以理解为是一个路由缓存项，书中 
+　　说的是路由表缓存中与协议无关的部分。一般接收的数据包中这项是不存在的，因为还
+　　没有到路由的阶段，只有在本机的回环数据包中这个路由缓存是存在的。*/
+    if (skb_dst(skb) == NULL) {
+　　/*查找路由，内核中一般在不开策略路由的情况下只有两个默认的路由表，分别是
+　　ip_fib_main_table,ip_fib_local_table。前者是用户可以修改的，即用户可以再
+　　用户态通过route add命令等修改。后者，是专门为发往本机的数据包建立的路由表。
+    如果查找失败，这个数据包就会被丢弃。
+　　*/    
+    int err = ip_route_input_noref(skb, iph-&gt;daddr, iph-&gt;saddr,
+                           iph-&gt;tos, skb-&gt;dev);
+    }
+
+    return dst_input(skb);
+　　.......
+}
+</pre></div>
+
+
+<p>接下来会调用此函数</p>
+<div class="codehilite"><pre>int ip_route_input_common(struct sk_buff *skb, __be32 daddr, __be32 saddr,
+               u8 tos, struct net_device *dev, bool noref)
+{
+　　/*计算hash值，准备查找路由缓存*/
+    hash = rt_hash(daddr, saddr, iif, rt_genid(net));
+　　/*以下是具体的查找过程，可想而知，查找会失败。缓存查找失败，就会去查找路由    表   */
+    for (rth = rcu_dereference(rt_hash_table[hash].chain); rth;
+         rth = rcu_dereference(rth-&gt;dst.rt_next)) {
+        if ((((__force u32)rth-&gt;rt_key_dst ^ (__force u32)daddr) |
+             ((__force u32)rth-&gt;rt_key_src ^ (__force u32)saddr) |
+             (rth-&gt;rt_route_iif ^ iif) |
+             (rth-&gt;rt_key_tos ^ tos)) == 0 &amp;&amp;
+            rth-&gt;rt_mark == skb-&gt;mark &amp;&amp;
+            net_eq(dev_net(rth-&gt;dst.dev), net) &amp;&amp;
+            !rt_is_expired(rth)) {
+            ipv4_validate_peer(rth);
+            if (noref) {
+                dst_use_noref(&amp;rth-&gt;dst, jiffies);
+                skb_dst_set_noref(skb, &amp;rth-&gt;dst);
+            } else {
+                dst_use(&amp;rth-&gt;dst, jiffies);
+                skb_dst_set(skb, &amp;rth-&gt;dst);
+            }
+            RT_CACHE_STAT_INC(in_hit);
+            rcu_read_unlock();
+            return 0;
+        }
+        RT_CACHE_STAT_INC(in_hlist_search);
+    }
+
+skip_cache:
+    if (ipv4_is_multicast(daddr)) {
+　　.......
+    }
+　　/*查找路由表*/
+    res = ip_route_input_slow(skb, daddr, saddr, tos, dev);
+    rcu_read_unlock();
+    return res;
+}
+</pre></div>
+
+
+<p>查找路由表的函数</p>
+<div class="codehilite"><pre>static int ip_route_input_slow(struct sk_buff *skb, __be32 daddr, __be32 saddr,
+                   u8 tos, struct net_device *dev)
+{
+　　......
+    /*
+     *  Now we are ready to route packet.
+     */
+　　/*fl4是struct flowi4 ；它事查找路由的关键字*/
+　　/*正式查找路由，查找会失败。然后会试图建立新的路由项*/
+    err = fib_lookup(net, &amp;fl4, &amp;res);
+    if (err != 0) {
+        if (!IN_DEV_FORWARD(in_dev))
+            goto e_hostunreach;
+        goto no_route;
+    }
+......
+
+　　/*要建立新的路由项，首先要确认数据包是发往本机的*/
+    if (res.type == RTN_LOCAL) {        /*然后要检查源路径的合法性，主要是为了检测IP欺骗等
+　　该函数中就会牵扯到反向路径过滤了。下面看一下这个函数
+　　*/
+        err = fib_validate_source(skb, saddr, daddr, tos,
+                      net-&gt;loopback_dev-&gt;ifindex,
+                      dev, &amp;spec_dst, &amp;itag);
+        if (err &lt; 0)
+            goto martian_source_keep_err;
+        if (err)
+            flags |= RTCF_DIRECTSRC;
+        spec_dst = daddr;
+
+　　/*如果有效性检查成功，则就会新建路由缓存，刷新路由表等*/
+        goto local_input;
+    }
+
+......
+local_input:
+    rth = rt_dst_alloc(net-&gt;loopback_dev,
+               IN_DEV_CONF_GET(in_dev, NOPOLICY), false);
+
+    hash = rt_hash(daddr, saddr, fl4.flowi4_iif, rt_genid(net));
+    rth = rt_intern_hash(hash, rth, skb, fl4.flowi4_iif);
+    err = 0;
+    if (IS_ERR(rth))
+        err = PTR_ERR(rth);
+    goto out;
+　　......
+}
+
+/* Given (packet source, input interface) and optional (dst, oif, tos):
+ * - (main) check, that source is valid i.e. not broadcast or our local
+ *   address.
+ * - figure out what &quot;logical&quot; interface this packet arrived
+ *   and calculate &quot;specific destination&quot; address.
+ * - check, that packet arrived from expected physical interface.
+ * called with rcu_read_lock()
+ */
+int fib_validate_source(struct sk_buff *skb, __be32 src, __be32 dst, u8 tos,
+            int oif, struct net_device *dev, __be32 *spec_dst,
+            u32 *itag)
+{
+　　.......
+　　/*什么叫反向路径过滤？
+　　书中的解释是：linux的默认行为认为非对称路由是可疑的，因为将根据路由表丢弃那
+　　些源IP地址通过接收接口为不可达的封包。
+　　通俗的解释下：
+　　如果接收的数据时A -&gt; B ,如果我逆着回去，从B不能到A，那这个封包就会丢弃。
+　　非对称路由，就是指A -&gt; B 与B -&gt; A的路径可能不一样。
+
+　　*/
+    fl4.flowi4_oif = 0;
+    fl4.flowi4_iif = oif;
+    /*仔细看下面，源 目的地址反了？这就是”反向”的含义，要查外出的路由表。*/
+　　         fl4.daddr = src;
+        fl4.saddr = dst;
+    fl4.flowi4_tos = tos;
+    fl4.flowi4_scope = RT_SCOPE_UNIVERSE;
+
+　　......
+　　/**/
+    if (fib_lookup(net, &amp;fl4, &amp;res))
+        goto last_resort; //查找失败，返回
+
+　　.......
+
+}
+</pre></div>
+    </div><div id="content-comments"><!-- Duoshuo Comment BEGIN -->
+<div class="ds-thread"></div>
+<script type="text/javascript">
+    var duoshuoQuery = {short_name:"atime-me"};
+(function() {
+ var ds = document.createElement('script');
+ ds.type = 'text/javascript';ds.async = true;
+ ds.src = 'http://static.duoshuo.com/embed.js';
+ ds.charset = 'UTF-8';
+ (document.getElementsByTagName('head')[0] 
+  || document.getElementsByTagName('body')[0]).appendChild(ds);
+ })();
+</script>
+<!-- Duoshuo Comment END --></div>
+</div>
+<div id="niu2-right-container" class="col-md-3">
+<div id="niu2-sidebar-meta" class="niu2-sidebar">
+    <div class="niu2-sidebar-label"><i class="fa fa-calendar"></i>发布时间:</div>
+    <div class="niu2-sidebar-value">2014-04-01 10:53:31</div>
+<div class="niu2-sidebar-label"><i class="fa fa-open-folder"></i>分类:</div>
+    <div class="niu2-sidebar-value"><a href="http://flankersky.com/linux/index.html">linux</a></div><div class="niu2-sidebar-label"><i class="fa fa-tag"></i>标签:</div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/linux.html">linux</a></div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/kernel.html">kernel</a></div></div>
+
+<div id="niu2-sidebar-toc" class="niu2-sidebar" data-status="closed"><div class="niu2-sidebar-label">
+        <i id="niu2-sidebar-toc-ctrl" class="fa fa-plus"></i>目录
+    </div>
+    <ol id="niu2-sidebar-toc-list">
+        <li><a href="#content-heading">有关反向路径过滤</a></li>
+        <li><a href='#afb608bd15aec70fab1d80481b791de9'>重点说下透明代理。</a><li><a href="#content-comments">评论</a></li></ol></div>
+</div></div><div id="body-footer" class="col-md-6 col-md-offset-2"><div class="niu2-footer">
+    <hr/>
+	<p>
+		Powered by <a href="https://github.com/getpelican/pelican">Pelican</a>,
+		©flankersky 
+2014				
+		<a href="http://www.miitbeian.gov.cn">苏ICP备13060073</a>
+        | 			<a href="/about.html" title="about me">关于</a></p>
+    <p class="niu2-icons"></p>
+</div></div><script type="text/javascript">
+	      var _gaq = _gaq || [];
+	      _gaq.push(['_setAccount', 'UA-45005256-1']);
+	      _gaq.push(['_trackPageview']);
+	
+	      (function() {
+	        var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+	        ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+	        var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+	      })();
+	    </script><!-- Include all compiled plugins (below), or include individual files as needed -->
+<script type="text/javascript" src="http://flankersky.com/theme/js/jquery-1.11.0.min.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/niu2.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/bootstrap.min.js"></script>
+
+<script type="text/javascript">
+    onContentLoaded();    </script>
+  </body>
+</html>

@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>尝试移植ROS的协议栈到Windows XP SP3 - flanker's sky</title>
+    <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/bootstrap.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/niu2.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/custom.css" type="text/css" />
+<link rel="stylesheet" href="http://flankersky.com/theme/css/pygments/github.css" type="text/css" />    
+    <script type="text/javascript">
+        window.onload = function() {
+        };
+    </script>
+    <!-- HTML5 shim and Respond.js IE8 support of HTML5 elements and media queries -->
+    <!--[if lt IE 9]>
+        <script src="http://flankersky.com/theme/js/html5shiv.js"></script>
+        <script src="http://flankersky.com/theme/js/respond.min.js"></script>
+    <![endif]-->
+    <!--[if IE 7]>
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome-ie7.min.css" type="text/css" />
+    <![endif]--></head>
+  <body> 
+    <div id="body-header"><div class="navbar navbar-inverse navbar-fixed-top">
+<div class="col-md-12">
+    <div class="navbar-header">
+        <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+        </button>
+        <a class="navbar-brand" href="http://flankersky.com">
+            <i class="fa fa-home"></i>flanker's sky
+        </a>
+    </div>
+	<nav class="collapse navbar-collapse bs-navbar-collapse" role="navigation">
+		<ul class="nav navbar-nav"><li><a href="/about.html" title="about me">
+			    <i class="fa fa-anchor"></i>关于</a>
+			</li><!-- category dropdown list -->
+		<li class="dropdown">
+           <a href="#" class="dropdown-toggle" data-toggle="dropdown">
+                <i class="fa fa-folder-open"></i>分类<b class="caret"></b>
+           </a>
+           <ul class="dropdown-menu"><li><a href="http://flankersky.com/linux/index.html"><i class="fa fa-folder-close"></i>linux                      (4)</a></li><li><a href="http://flankersky.com/nginx/index.html"><i class="fa fa-folder-close"></i>nginx                      (3)</a></li><li><a href="http://flankersky.com/windows/index.html"><i class="fa fa-folder-close"></i>windows                      (4)</a></li></ul>
+        </li>
+        <!--  self defined dropdown list --></ul>
+        
+        <!-- right nav bar -->
+		<ul class="nav navbar-nav navbar-right">
+		<!-- google custom search --></ul>
+	</nav>
+</div>
+</div></div>
+    
+    <div id="body-content"><div class="col-md-8 col-md-offset-2"><h1 id="content-heading">尝试移植ROS的协议栈到Windows XP SP3</h1></div>
+<div id="niu2-left-container" class="col-md-6 col-md-offset-2">
+    <div id="niu2-main-content">
+        <p>&emsp;&emsp;尝试进行此项移植的目的，只是为了检验这种移植的可能性，毕竟windows是一个闭源的操作系统。而且，查阅了网上的很多资料，也有人讨论此问题，但大都只是从原理上来讲讲，比如，有篇北邮的硕士论文《Windows下的TCP协议栈开发》，说的很详细，但说的基本上就是协议栈与上层(TDI)、下层(NIC/NDIS)间的这些必须要实现的接口，这些其实在《windows内核情景分析（下）》中讲的很详细了。不过这篇文章在当时(2007)年来说应该是比较不错的资料，因为《windows内核情景分析》是在2009年才出的。所以，网上关于windows协议栈移植的文章基本都是理论，当然也有人说移植成功过，虽然说没有放出源码，但对我心里上还是个不小的鼓励，至少证明是可以移植成功的。</p>
+<p>完整的工程代码：<a href="https://github.com/flankersky/WinStack">https://github.com/flankersky/WinStack</a>
+百度云：<a href="http://pan.baidu.com/s/1pJ2kCh9">http://pan.baidu.com/s/1pJ2kCh9</a> 密码：2fdi</p>
+<p>说明：</p>
+<p>&emsp;&emsp;到目前为止，代码只是能编译通过，且能加载成功，而且创建内核设备对象成功，至少证明了windows上的协议栈是可以被替换掉的。但是对于安装时的问题(没有inf文件，不会写)、卸载时的BSOD等问题，本人到目前至少是无能为力。只能算是给想移植协议栈到windows的朋友们开了一个头而已，当然，如果本人以后完全移植成功了，肯定会来拍死这些Bugs的。</p>
+<p>实验环境：
+主机：win7 x64
+编译环境：WDK-7600.***
+测试环境：XP SP3 In vmware</p>
+<h2 id="27e8f83a772621b9229d917d14a8d9ec">1、卸载windows xp sp3上的协议栈</h2>
+<p>参考： <a href="http://www.techrepublic.com/forums/questions/how-to-uninstall-tcp-ip-in-win-xp/">http://www.techrepublic.com/forums/questions/how-to-uninstall-tcp-ip-in-win-xp/</a>
+懒人就不给大家翻译了：</p>
+<div class="codehilite"><pre>11. Locate the Nettcpip.Inf file in %winroot%\inf, and then open the file in Notepad.
+12. Locate the [MS_TCPIP.PrimaryInstall] section.
+13. Edit the Characteristics = 0xa0 entry and replace 0xa0 with 0x80.
+14. Save the file, and then exit Notepad.
+15. In Control Panel, double-click Network Connections, right-click Local Area Connection, and then select Properties.
+16. On the General tab, click Install, select Protocol, and then click Add.
+17. In the Select Network Protocols window, click Have Disk.
+18. In the Copy manufacturer&#39;s files from: text box, type c:\windows\inf, and then click OK.
+19. Select Internet Protocol (TCP/IP), and then click OK.Note This step will return you to the Local Area Connection Properties screen, but now the UninstallButton is available.
+20. Select Internet Protocol (TCP/IP), click Uninstall, and then click Yes.
+RESTART
+Succesfull uninstallation of TCP/IP will remove numerous keys from the registry including
+HKLM/system/CurrentControlSet/services/tcpip
+HKLM/system/CurrentControlSet/services/dhcp
+HKLM/system/CurrentControlSet/services/dnscache
+HKLM/system/CurrentControlSet/services/ipsec
+HKLM/system/CurrentControlSet/services/policyagent
+HKLM/system/CurrentControlSet/services/atmarpc
+HKLM/system/CurrentControlSet/services/nlaThese represent various interconnected and interdependant services.
+
+For good measure you should delete the following keys before reinstalling TCP/IP in step #2
+HKLM/system/CurrentControlSet/services/winsock
+HKLM/system/CurrentControlSet/services/winsock2
+
+Step #2
+Reinstall of TCP/IP
+———————————————————————-
+Following the above substep #13, replace the 0×80 back to 0xa0, this will eliminate the related”unsigned driver” error that was encountered during the uninstallation phase.
+
+Return to “local area connection”&gt; properties &gt; general tab &gt; install &gt; Protocol &gt; TCP/IP
+
+You may receive an “Extended Error” failure upon trying to reinstall the TCP/IP, this is related to theInstaller sub-system conflicting with the security database status.
+To check the integrity of the security database
+Esentutl /g c:\windows\security\Database\secedit.Sdb
+There may be a message saying database is out of date
+
+First try the recovery option
+Esentutl /r c:\windows\security\Database\secedit.Sdb
+
+This did not work for me, I needed the repair option
+Esentutl /p c:\windows\security\Database\secedit.Sdb
+
+Rerun the /g option to ensure that integrity is good and database is up to date.
+Now return to the “local area network setup”
+Choose install &gt; protocol &gt; tcp/ip and try again
+</pre></div>
+
+
+<h2 id="d9ebf3d304c272f3e25a481ac74e1a97">2、编译</h2>
+<p>从ReactOS中把协议栈的东西都抠出来，然后组织一下目录结构。就开始编译。</p>
+<p>首先编译lwip。(lwip是作为tcp部分)</p>
+<div class="codehilite"><pre>cd lwip\src\api; build -c
+cd lwip\src\core\ipv4; build -c
+cd lwip\src\core\snmp; build -c
+cd lwip\src\core; build -c
+cd lwip\src; build -c
+
+cd #代码根目录#; build -c //编译的时候遇到了几个error，然后就是一下头文件的东西。
+</pre></div>
+
+
+<p>其中有一个纠结了挺长时间的错误</p>
+<div class="codehilite"><pre>ntoskrnl.lib(ntoskrnl.exe) : error LNK2005: _KeInitializeSpinLock@4 already defined in ****
+</pre></div>
+
+
+<p>在<a href="http://bbs3.driverdevelop.com/read.php?tid=111048">http://bbs3.driverdevelop.com/read.php?tid=111048</a>发现了这个问题，
+在<a href="http://blog.csdn.net/iiprogram/article/details/1495713">http://blog.csdn.net/iiprogram/article/details/1495713</a>发现了答案，</p>
+<p>大致内容如下:</p>
+<div class="codehilite"><pre>WIN9X_COMPAT_SPINLOCK
+You can define this compile flag in order to disable another “optimization”, which was first introduced in the Windows 2003 DDK (i.e. DDK build number 3790+).
+If you define the WIN9X_COMPAT_SPINLOCK compile flag, which I recommend, the function KeInitializeSpinLock() is an actual library function. Otherwise, i.e. if you do not define WIN9X_COMPAT_SPINLOCK, KeInitializeSpinLock() is implemented as an inline function that is incompatible with Windows 9x/Me.
+Thus, if your driver binary file must be used on all Windows platforms including Windows 9x/Me, you should define the WIN9X_COMPAT_SPINLOCK compile flag.
+</pre></div>
+
+
+<p>&emsp;&emsp;这篇blog中的其他东西也很有用。。。</p>
+<h2 id="160856cb88bcb5ee4e1cd1f9ad27a77f">3、测试</h2>
+<p>本人实在是不会写inf文件，于是在网上搜罗了一下。在
+http://asp.renpeicheng.com/html/2006-03/232.html 发现了一个inf文件。改了一下，可以安装成功。但是。。。“本地连接”的“属性”有时都打不开。用DriverMonitor、driverstudio也可以安装（安装之后要重启，虽然它不提示需要重启）。</p>
+<p>然后，查看了一下内核里的设备对象（如下图）。可以看到tcp udp等，说明确实加载进去了。
+<img alt="" src="http://img15.poco.cn/mypoco/myphoto/20140331/11/1746743632014033111592522THX.jpg" />
+在windbg里也可以看到驱动打印出的log，驱动对象接收到了上层的IRP请求。
+<img alt="" src="http://www.flankersky.com/wp-content/uploads/2222.jpg" />
+总结：</p>
+<p>&emsp;&emsp;虽然，只是简单的将ROS的代码拿过来编译，但至少证明了这种移植的可能性，协议栈与上下层之间的接口至少是没有问题的。对于其他的bug，由于是刚刚入门，且时间紧张，暂时无能为力。如果以后继续研究的话，都会尽量去修复的。也希望，如果有高人看到这篇文章，能给本人一些指点，不胜感激。</p>
+    </div><div id="content-comments"><!-- Duoshuo Comment BEGIN -->
+<div class="ds-thread"></div>
+<script type="text/javascript">
+    var duoshuoQuery = {short_name:"atime-me"};
+(function() {
+ var ds = document.createElement('script');
+ ds.type = 'text/javascript';ds.async = true;
+ ds.src = 'http://static.duoshuo.com/embed.js';
+ ds.charset = 'UTF-8';
+ (document.getElementsByTagName('head')[0] 
+  || document.getElementsByTagName('body')[0]).appendChild(ds);
+ })();
+</script>
+<!-- Duoshuo Comment END --></div>
+</div>
+<div id="niu2-right-container" class="col-md-3">
+<div id="niu2-sidebar-meta" class="niu2-sidebar">
+    <div class="niu2-sidebar-label"><i class="fa fa-calendar"></i>发布时间:</div>
+    <div class="niu2-sidebar-value">2014-04-01 10:57:04</div>
+<div class="niu2-sidebar-label"><i class="fa fa-open-folder"></i>分类:</div>
+    <div class="niu2-sidebar-value"><a href="http://flankersky.com/windows/index.html">windows</a></div><div class="niu2-sidebar-label"><i class="fa fa-tag"></i>标签:</div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/windows.html">windows</a></div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/ndis.html">ndis</a></div></div>
+
+<div id="niu2-sidebar-toc" class="niu2-sidebar" data-status="closed"><div class="niu2-sidebar-label">
+        <i id="niu2-sidebar-toc-ctrl" class="fa fa-plus"></i>目录
+    </div>
+    <ol id="niu2-sidebar-toc-list">
+        <li><a href="#content-heading">尝试移植ROS的协议栈到Windows XP SP3</a></li>
+        <li><a href='#27e8f83a772621b9229d917d14a8d9ec'>1、卸载windows xp sp3上的协议栈</a></li><li><a href='#d9ebf3d304c272f3e25a481ac74e1a97'>2、编译</a></li><li><a href='#160856cb88bcb5ee4e1cd1f9ad27a77f'>3、测试</a></li><li><a href="#content-comments">评论</a></li></ol></div>
+</div></div><div id="body-footer" class="col-md-6 col-md-offset-2"><div class="niu2-footer">
+    <hr/>
+	<p>
+		Powered by <a href="https://github.com/getpelican/pelican">Pelican</a>,
+		©flankersky 
+2014				
+		<a href="http://www.miitbeian.gov.cn">苏ICP备13060073</a>
+        | 			<a href="/about.html" title="about me">关于</a></p>
+    <p class="niu2-icons"></p>
+</div></div><script type="text/javascript">
+	      var _gaq = _gaq || [];
+	      _gaq.push(['_setAccount', 'UA-45005256-1']);
+	      _gaq.push(['_trackPageview']);
+	
+	      (function() {
+	        var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+	        ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+	        var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+	      })();
+	    </script><!-- Include all compiled plugins (below), or include individual files as needed -->
+<script type="text/javascript" src="http://flankersky.com/theme/js/jquery-1.11.0.min.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/niu2.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/bootstrap.min.js"></script>
+
+<script type="text/javascript">
+    onContentLoaded();    </script>
+  </body>
+</html>

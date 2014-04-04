@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>nginx中的upstream相关(1)：upstream请求的发送 - flanker's sky</title>
+    <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/bootstrap.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome.min.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/niu2.css" type="text/css" />
+    <link rel="stylesheet" href="http://flankersky.com/theme/css/custom.css" type="text/css" />
+<link rel="stylesheet" href="http://flankersky.com/theme/css/pygments/github.css" type="text/css" />    
+    <script type="text/javascript">
+        window.onload = function() {
+        };
+    </script>
+    <!-- HTML5 shim and Respond.js IE8 support of HTML5 elements and media queries -->
+    <!--[if lt IE 9]>
+        <script src="http://flankersky.com/theme/js/html5shiv.js"></script>
+        <script src="http://flankersky.com/theme/js/respond.min.js"></script>
+    <![endif]-->
+    <!--[if IE 7]>
+    <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome-ie7.min.css" type="text/css" />
+    <![endif]--></head>
+  <body> 
+    <div id="body-header"><div class="navbar navbar-inverse navbar-fixed-top">
+<div class="col-md-12">
+    <div class="navbar-header">
+        <button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse">
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+            <span class="icon-bar"></span>
+        </button>
+        <a class="navbar-brand" href="http://flankersky.com">
+            <i class="fa fa-home"></i>flanker's sky
+        </a>
+    </div>
+	<nav class="collapse navbar-collapse bs-navbar-collapse" role="navigation">
+		<ul class="nav navbar-nav"><li><a href="/about.html" title="about me">
+			    <i class="fa fa-anchor"></i>关于</a>
+			</li><!-- category dropdown list -->
+		<li class="dropdown">
+           <a href="#" class="dropdown-toggle" data-toggle="dropdown">
+                <i class="fa fa-folder-open"></i>分类<b class="caret"></b>
+           </a>
+           <ul class="dropdown-menu"><li><a href="http://flankersky.com/linux/index.html"><i class="fa fa-folder-close"></i>linux                      (4)</a></li><li><a href="http://flankersky.com/nginx/index.html"><i class="fa fa-folder-close"></i>nginx                      (3)</a></li><li><a href="http://flankersky.com/windows/index.html"><i class="fa fa-folder-close"></i>windows                      (4)</a></li></ul>
+        </li>
+        <!--  self defined dropdown list --></ul>
+        
+        <!-- right nav bar -->
+		<ul class="nav navbar-nav navbar-right">
+		<!-- google custom search --></ul>
+	</nav>
+</div>
+</div></div>
+    
+    <div id="body-content"><div class="col-md-8 col-md-offset-2"><h1 id="content-heading">nginx中的upstream相关(1)：upstream请求的发送</h1></div>
+<div id="niu2-left-container" class="col-md-6 col-md-offset-2">
+    <div id="niu2-main-content">
+        <p>&emsp;&emsp;关于nginx模块开发，必须要这本《深入理解Nginx模块开发与架构解析》，作者陶辉，
+作者博客 http://blog.csdn.net/russell_tao
+关于此书的勘误表 http://nginx.weebly.com/</p>
+<p>&emsp;&emsp;关于nginx，自己也没有系统的学习，只是看了几天书，然后根据书中提到的例子，开始试图实现自己的需求，所以，没能从全局把握nginx的架构，只是针对开发中遇到的一些问题，相应的做一下分析。但关于nginx，以后还会慢慢写，希望能尽可能的覆盖nginx的大部分特性。</p>
+<p>本期说一下nginx中，关于upstream。</p>
+<p>关于upstream基础的东西，可以参考《深入理解Nginx》的第五章，书中还有一个简单的例子。提醒读者注意的一点是，书中的例子说用upstream的resolved成员设置后端地址的方法，</p>
+<p>&emsp;&emsp;如果大家在今天仍想借鉴这种方法的话，可能会不是很适用。因为，书中的nginx的代码版本是1.0.4，是不支持upstream的长连接的。Upstream的长连接实在1.1.14之后才开始支持的。这一点会在讲长连接时具体分析。</p>
+<p>Upstream的建立及初始化</p>
+<p>&emsp;&emsp;初始化upstream之前必须要初始化几个回调函数，其中下面三个是必须要初始化的</p>
+<div class="codehilite"><pre>ngx_int_t (*create_request)(ngx_http_request_t *r);
+ngx_int_t (*process_header)(ngx_http_request_t *r);
+void (*finalize_request)(ngx_http_request_t *r, ngx_int_t rc);
+</pre></div>
+
+
+<p>&emsp;&emsp;为什么必须初始化，后面会看到原因。然后就可以调用upstream的初始化函数了。大致流程如下图</p>
+<p><img alt="" src="http://img15.poco.cn/mypoco/myphoto/20140330/21/1746743632014033021083062THX.jpg" /></p>
+<p>之后就可以等待upstream的读事件了，用“等待”可能不合适，因为upstream是异步的。
+下面具体分析下每个函数的细节：</p>
+<div class="codehilite"><pre>static void
+ngx_http_upstream_init_request(ngx_http_request_t *r)
+{
+
+
+#if (NGX_HTTP_CACHE)
+...
+/*关于cache的东西还没有看，暂时先不考虑了^-^*/
+...
+#endif
+
+...
+/*create_request就是模块必须实现的三个回调函数之一，作用是构建发往后端的请求
+　　这个函数，书中有实现及讲解，这里就不罗嗦了
+*/
+    if (u-&gt;create_request(r) != NGX_OK) {
+        ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
+        return;
+    }
+
+
+
+　　/*这是向后端链接时，本地使用的地址，如果配置文件有设置的话，就取自己设置的        地址
+　　*/
+    u-&gt;peer.local = ngx_http_upstream_get_local(r, u-&gt;conf-&gt;local);
+
+　　/*书中有说道可以用resolved设置后端地址*/
+    if (u-&gt;resolved == NULL) {
+　　/*不然，就用upstream中配置的后端地址，
+　　实在配置文件的upstream块配置的
+　　*/
+        uscf = u-&gt;conf-&gt;upstream;
+
+　　} else {
+           /*如果resolved中的地址存在，直接连接，不然，下面还要进行DNS解析*/
+            if (u-&gt;resolved-&gt;sockaddr) {
+　　/*这里牵扯到upstream负载均衡的东西，暂时也没看，^_^*/
+            if (ngx_http_upstream_create_round_robin_peer(r, u-&gt;resolved)
+                != NGX_OK)
+            {
+                ngx_http_upstream_finalize_request(r, u,
+                                               NGX_HTTP_INTERNAL_SERVER_ERROR);
+                return;
+            }
+　　/*开始连接后端server*/
+            ngx_http_upstream_connect(r, u);
+
+            return;
+        }
+
+　　...
+　　/*解析后端地址*/
+        ctx = ngx_resolve_start(clcf-&gt;resolver, &amp;temp);
+    ...
+        return;
+    }
+
+found:
+/*如果resolved没有设置后端server的地址，会跳到这里
+
+Uscf是什么？说长连接的时候，再细说这个东西
+*/
+if (uscf == NULL) {
+    ngx_log_error(NGX_LOG_ALERT, r-&gt;connection-&gt;log, 0,
+                  &quot;no upstream configuration&quot;);
+    ngx_http_upstream_finalize_request(r, u,
+                                       NGX_HTTP_INTERNAL_SERVER_ERROR);
+    return;
+}
+
+if (uscf-&gt;peer.init(r, uscf) != NGX_OK) {
+    ngx_http_upstream_finalize_request(r, u,
+                                       NGX_HTTP_INTERNAL_SERVER_ERROR);
+    return;
+}
+/*
+ *  连接后端server
+ */
+ngx_http_upstream_connect(r, u);
+}
+
+static void
+ngx_http_upstream_connect(ngx_http_request_t *r, ngx_http_upstream_t *u)
+{
+    ngx_int_t          rc;
+
+
+　　/*连接后端server，就是最基本的建立tcp连接的过程
+　　建立socket，
+　　如果需要，bind本地地址
+　　设置套接字选项
+　　Connect后端server
+　　*/
+    rc = ngx_event_connect_peer(&amp;u-&gt;peer);
+
+　　/*设置读写事件的回调函数*/
+    c-&gt;write-&gt;handler = ngx_http_upstream_handler;
+    c-&gt;read-&gt;handler = ngx_http_upstream_handler;
+　　/*真正有读写事件时，实际起作用的是下面两个*/
+    u-&gt;write_event_handler = ngx_http_upstream_send_request_handler;
+    u-&gt;read_event_handler = ngx_http_upstream_process_header;
+
+　　/*request_body是client想nginx发来的请求*/
+    if (r-&gt;request_body
+        &amp;&amp; r-&gt;request_body-&gt;buf
+        &amp;&amp; r-&gt;request_body-&gt;temp_file
+        &amp;&amp; r == r-&gt;main)
+
+    /*
+     * the r-&gt;request_body-&gt;buf can be reused for one request only,
+     * the subrequests should allocate their own temporary bufs
+     */
+
+    u-&gt;output.free = ngx_alloc_chain_link(r-&gt;pool);
+    if (u-&gt;output.free == NULL) {
+        ngx_http_upstream_finalize_request(r, u,
+                                           NGX_HTTP_INTERNAL_SERVER_ERROR);
+        return;
+    }
+
+    u-&gt;output.free-&gt;buf = r-&gt;request_body-&gt;buf;
+    u-&gt;output.free-&gt;next = NULL;
+    u-&gt;output.allocated = 1;
+
+    r-&gt;request_body-&gt;buf-&gt;pos = r-&gt;request_body-&gt;buf-&gt;start;
+    r-&gt;request_body-&gt;buf-&gt;last = r-&gt;request_body-&gt;buf-&gt;start;
+    r-&gt;request_body-&gt;buf-&gt;tag = u-&gt;output.tag;
+}
+
+u-&gt;request_sent = 0;
+
+
+    /*
+     * tcp握手没有成功，添加写事件超时，写事件的回调函数前面已经设置过了
+     */
+if (rc == NGX_AGAIN) {
+    ngx_add_timer(c-&gt;write, u-&gt;conf-&gt;connect_timeout);
+    return;
+}
+
+/*向后端发送http的请求*/
+ngx_http_upstream_send_request(r, u);
+}
+
+static void
+ngx_http_upstream_send_request(ngx_http_request_t *r, ngx_http_upstream_t *u)
+{
+...
+/*发送http请求
+request_bufs 是在自定义的create_request里初始化的。
+*/
+    rc = ngx_output_chain(&amp;u-&gt;output, u-&gt;request_sent ? NULL : u-&gt;request_bufs);
+　　if (c-&gt;write-&gt;timer_set) {
+　　/*删除写事件超时*/
+        ngx_del_timer(c-&gt;write);
+    }
+
+    ngx_add_timer(c-&gt;read, u-&gt;conf-&gt;read_timeout);
+
+#if 1
+　　/*有可能会很快返回？*/
+　　if (c-&gt;read-&gt;ready) { 
+　　/*处理返回的数据*/        
+        ngx_http_upstream_process_header(r, u);
+        return;
+    }
+#endif
+　　u-&gt;write_event_handler = ngx_http_upstream_dummy_handler;
+　　}
+</pre></div>
+
+
+<p>好了，白天看，晚上写，也没法写的很详细。今天，就到这吧</p>
+    </div><div id="content-comments"><!-- Duoshuo Comment BEGIN -->
+<div class="ds-thread"></div>
+<script type="text/javascript">
+    var duoshuoQuery = {short_name:"atime-me"};
+(function() {
+ var ds = document.createElement('script');
+ ds.type = 'text/javascript';ds.async = true;
+ ds.src = 'http://static.duoshuo.com/embed.js';
+ ds.charset = 'UTF-8';
+ (document.getElementsByTagName('head')[0] 
+  || document.getElementsByTagName('body')[0]).appendChild(ds);
+ })();
+</script>
+<!-- Duoshuo Comment END --></div>
+</div>
+<div id="niu2-right-container" class="col-md-3">
+<div id="niu2-sidebar-meta" class="niu2-sidebar">
+    <div class="niu2-sidebar-label"><i class="fa fa-calendar"></i>发布时间:</div>
+    <div class="niu2-sidebar-value">2014-04-01 10:55:17</div>
+<div class="niu2-sidebar-label"><i class="fa fa-open-folder"></i>分类:</div>
+    <div class="niu2-sidebar-value"><a href="http://flankersky.com/nginx/index.html">nginx</a></div><div class="niu2-sidebar-label"><i class="fa fa-tag"></i>标签:</div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/nginx.html">nginx</a></div></div>
+
+<div id="niu2-sidebar-toc" class="niu2-sidebar" data-status="closed"><div class="niu2-sidebar-label">
+        <i id="niu2-sidebar-toc-ctrl" class="fa fa-plus"></i>目录
+    </div>
+    <ol id="niu2-sidebar-toc-list">
+        <li><a href="#content-heading">nginx中的upstream相关(1)：upstream请求的发送</a></li>
+        <li><a href="#content-comments">评论</a></li></ol></div>
+</div></div><div id="body-footer" class="col-md-6 col-md-offset-2"><div class="niu2-footer">
+    <hr/>
+	<p>
+		Powered by <a href="https://github.com/getpelican/pelican">Pelican</a>,
+		©flankersky 
+2014				
+		<a href="http://www.miitbeian.gov.cn">苏ICP备13060073</a>
+        | 			<a href="/about.html" title="about me">关于</a></p>
+    <p class="niu2-icons"></p>
+</div></div><script type="text/javascript">
+	      var _gaq = _gaq || [];
+	      _gaq.push(['_setAccount', 'UA-45005256-1']);
+	      _gaq.push(['_trackPageview']);
+	
+	      (function() {
+	        var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+	        ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+	        var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+	      })();
+	    </script><!-- Include all compiled plugins (below), or include individual files as needed -->
+<script type="text/javascript" src="http://flankersky.com/theme/js/jquery-1.11.0.min.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/niu2.js"></script>
+    <script type="text/javascript" src="http://flankersky.com/theme/js/bootstrap.min.js"></script>
+
+<script type="text/javascript">
+    onContentLoaded();    </script>
+  </body>
+</html>
