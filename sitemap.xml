@@ -4,203 +4,203 @@ xsi:schemaLocation="http://www.sitemaps.org/schemas/sitemap/0.9 http://www.sitem
 xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 
 <url>
-<loc>http://flankersky.github.io/index.html</loc>
-<lastmod>2014-04-30T09:36:37-00:00</lastmod>
+<loc>http://flankersky.com/index.html</loc>
+<lastmod>2014-04-30T09:50:24-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/archives.html</loc>
-<lastmod>2014-04-30T09:36:37-00:00</lastmod>
+<loc>http://flankersky.com/archives.html</loc>
+<lastmod>2014-04-30T09:50:24-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/categories.html</loc>
-<lastmod>2014-04-30T09:36:37-00:00</lastmod>
+<loc>http://flankersky.com/categories.html</loc>
+<lastmod>2014-04-30T09:50:24-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/android/android-src.html</loc>
+<loc>http://flankersky.com/android/android-src.html</loc>
 <lastmod>2014-04-23T08:30:23-00:00</lastmod>
 <changefreq>weekly</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/windows/win7filter.html</loc>
+<loc>http://flankersky.com/windows/win7filter.html</loc>
 <lastmod>2014-04-01T11:06:36-00:00</lastmod>
 <changefreq>weekly</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/windows/passthru.html</loc>
+<loc>http://flankersky.com/windows/passthru.html</loc>
 <lastmod>2014-04-01T11:05:57-00:00</lastmod>
 <changefreq>weekly</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/nginx/nginx03.html</loc>
+<loc>http://flankersky.com/nginx/nginx03.html</loc>
 <lastmod>2014-04-01T10:57:37-00:00</lastmod>
 <changefreq>weekly</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/windows/ndisprot.html</loc>
+<loc>http://flankersky.com/windows/ndisprot.html</loc>
 <lastmod>2014-04-01T10:57:04-00:00</lastmod>
 <changefreq>weekly</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/windows/windbg.html</loc>
+<loc>http://flankersky.com/windows/windbg.html</loc>
 <lastmod>2014-04-01T10:56:54-00:00</lastmod>
 <changefreq>weekly</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/nginx/nginx02.html</loc>
+<loc>http://flankersky.com/nginx/nginx02.html</loc>
 <lastmod>2014-04-01T10:56:27-00:00</lastmod>
 <changefreq>weekly</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/nginx/nginx01.html</loc>
+<loc>http://flankersky.com/nginx/nginx01.html</loc>
 <lastmod>2014-04-01T10:55:17-00:00</lastmod>
 <changefreq>weekly</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/linux/psocket.html</loc>
+<loc>http://flankersky.com/linux/psocket.html</loc>
 <lastmod>2014-04-01T10:54:45-00:00</lastmod>
 <changefreq>weekly</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/linux/checksaddr.html</loc>
+<loc>http://flankersky.com/linux/checksaddr.html</loc>
 <lastmod>2014-04-01T10:53:31-00:00</lastmod>
 <changefreq>weekly</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/linux/safenetif.html</loc>
+<loc>http://flankersky.com/linux/safenetif.html</loc>
 <lastmod>2014-04-01T10:52:14-00:00</lastmod>
 <changefreq>weekly</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/linux/netiflock.html</loc>
+<loc>http://flankersky.com/linux/netiflock.html</loc>
 <lastmod>2014-04-01T10:51:22-00:00</lastmod>
 <changefreq>weekly</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/android/index.html</loc>
+<loc>http://flankersky.com/android/index.html</loc>
 <lastmod>2014-04-23T08:30:23-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/linux/index.html</loc>
+<loc>http://flankersky.com/linux/index.html</loc>
 <lastmod>2014-04-01T10:54:45-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/nginx/index.html</loc>
+<loc>http://flankersky.com/nginx/index.html</loc>
 <lastmod>2014-04-01T10:57:37-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/windows/index.html</loc>
+<loc>http://flankersky.com/windows/index.html</loc>
 <lastmod>2014-04-01T11:06:36-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/tag/passthru.html</loc>
+<loc>http://flankersky.com/tag/passthru.html</loc>
 <lastmod>2014-04-01T11:05:57-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/tag/kernel.html</loc>
+<loc>http://flankersky.com/tag/kernel.html</loc>
 <lastmod>2014-04-01T10:56:27-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/tag/nginx.html</loc>
+<loc>http://flankersky.com/tag/nginx.html</loc>
 <lastmod>2014-04-01T10:57:37-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/tag/windows.html</loc>
+<loc>http://flankersky.com/tag/windows.html</loc>
 <lastmod>2014-04-01T11:05:57-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/tag/win7.html</loc>
+<loc>http://flankersky.com/tag/win7.html</loc>
 <lastmod>2014-04-01T11:06:36-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/tag/filter.html</loc>
+<loc>http://flankersky.com/tag/filter.html</loc>
 <lastmod>2014-04-01T11:06:36-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/tag/yuan-ma.html</loc>
+<loc>http://flankersky.com/tag/yuan-ma.html</loc>
 <lastmod>2014-04-23T08:30:23-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/tag/linux.html</loc>
+<loc>http://flankersky.com/tag/linux.html</loc>
 <lastmod>2014-04-01T10:56:27-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/tag/android.html</loc>
+<loc>http://flankersky.com/tag/android.html</loc>
 <lastmod>2014-04-23T08:30:23-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
-<loc>http://flankersky.github.io/tag/ndis.html</loc>
+<loc>http://flankersky.com/tag/ndis.html</loc>
 <lastmod>2014-04-01T10:57:04-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
