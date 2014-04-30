@@ -5,22 +5,29 @@ xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 
 <url>
 <loc>http://flankersky.com/index.html</loc>
-<lastmod>2014-04-01T11:07:30-00:00</lastmod>
+<lastmod>2014-04-30T09:17:01-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
 <loc>http://flankersky.com/archives.html</loc>
-<lastmod>2014-04-01T11:07:30-00:00</lastmod>
+<lastmod>2014-04-30T09:17:01-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
 
 <url>
 <loc>http://flankersky.com/categories.html</loc>
-<lastmod>2014-04-01T11:07:30-00:00</lastmod>
+<lastmod>2014-04-30T09:17:01-00:00</lastmod>
 <changefreq>daily</changefreq>
+<priority>0.5</priority>
+</url>
+
+<url>
+<loc>http://flankersky.com/android/android-src.html</loc>
+<lastmod>2014-04-23T08:30:23-00:00</lastmod>
+<changefreq>weekly</changefreq>
 <priority>0.5</priority>
 </url>
 
@@ -102,6 +109,13 @@ xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 </url>
 
 <url>
+<loc>http://flankersky.com/android/index.html</loc>
+<lastmod>2014-04-23T08:30:23-00:00</lastmod>
+<changefreq>daily</changefreq>
+<priority>0.5</priority>
+</url>
+
+<url>
 <loc>http://flankersky.com/linux/index.html</loc>
 <lastmod>2014-04-01T10:54:45-00:00</lastmod>
 <changefreq>daily</changefreq>
@@ -137,6 +151,13 @@ xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 </url>
 
 <url>
+<loc>http://flankersky.com/tag/nginx.html</loc>
+<lastmod>2014-04-01T10:57:37-00:00</lastmod>
+<changefreq>daily</changefreq>
+<priority>0.5</priority>
+</url>
+
+<url>
 <loc>http://flankersky.com/tag/windows.html</loc>
 <lastmod>2014-04-01T11:05:57-00:00</lastmod>
 <changefreq>daily</changefreq>
@@ -158,8 +179,8 @@ xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 </url>
 
 <url>
-<loc>http://flankersky.com/tag/nginx.html</loc>
-<lastmod>2014-04-01T10:57:37-00:00</lastmod>
+<loc>http://flankersky.com/tag/yuan-ma.html</loc>
+<lastmod>2014-04-23T08:30:23-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>
@@ -167,6 +188,13 @@ xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 <url>
 <loc>http://flankersky.com/tag/linux.html</loc>
 <lastmod>2014-04-01T10:56:27-00:00</lastmod>
+<changefreq>daily</changefreq>
+<priority>0.5</priority>
+</url>
+
+<url>
+<loc>http://flankersky.com/tag/android.html</loc>
+<lastmod>2014-04-23T08:30:23-00:00</lastmod>
 <changefreq>daily</changefreq>
 <priority>0.5</priority>
 </url>

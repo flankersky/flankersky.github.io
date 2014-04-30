@@ -3,7 +3,7 @@
   <head>
 <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>nginx中的upstream相关(3)：向下游转发数据 - flanker's sky</title>
+    <title>安卓源码的下载 编译 - flanker's sky</title>
     <link rel="shortcut icon" type="image/x-icon" href="/favicon.ico">
     <link rel="stylesheet" href="http://flankersky.com/theme/css/bootstrap.min.css" type="text/css" />
     <link rel="stylesheet" href="http://flankersky.com/theme/font-awesome/css/font-awesome.min.css" type="text/css" />
@@ -54,104 +54,55 @@
 </div>
 </div></div>
     
-    <div id="body-content"><div class="col-md-8 col-md-offset-2"><h1 id="content-heading">nginx中的upstream相关(3)：向下游转发数据</h1></div>
+    <div id="body-content"><div class="col-md-8 col-md-offset-2"><h1 id="content-heading">安卓源码的下载 编译</h1></div>
 <div id="niu2-left-container" class="col-md-6 col-md-offset-2">
     <div id="niu2-main-content">
-        <p>觉得可以总览一下整个upstream的过程了。简单画了个图。如下</p>
-<p><img alt="" src="http://img15.poco.cn/mypoco/myphoto/20140331/11/1746743632014033111360973THX.jpg" /></p>
-<p>上图大体分为三个部分，upstream的初始化，upstream的数据接收，upstream的数据回传。
-由于nginx是异步化的结构，所以三个部分之间就是靠事件触发联系起来的。
-前两个部分，前面两篇文章分别介绍过了，下面看看第三部分。Upstream的数据回传</p>
-<div class="codehilite"><pre>static void
-ngx_http_upstream_process_non_buffered_request(ngx_http_request_t *r,
-ngx_uint_t do_write)
-{
-
-u = r-&gt;upstream;
-downstream = r-&gt;connection;
-upstream = u-&gt;peer.connection;
-
-b = &amp;u-&gt;buffer;
-/*u-&gt;length要发送的数据的长度，一般是在收到响应头的时候对其赋值为content-length，当然，trunk编码的时候要区别对待。
-每发送一些数据，u-&gt;length就会相应的做减法，代表还有多长的数据需要发送。如果是0，就代表全部发送完了
-do_write：是否立即发送的意思。
- */
-do_write = do_write || u-&gt;length == 0;
-
-for ( ;; ) {
-
-    if (do_write) {
-/*out_buf代表本次将要发送的数据，input_filter会将数据挂载到out_buf。
-busy_bufs “忙”的意思，就是说，调用ngx_http_output_filter之后，out_bufs不一定会被立即释放，因为数据并不一定真正的发送出去(nginx是异步的)，所以调用ngx_chain_update_chains将out_buf挂载到busy_bufs，当busy_bufs真正为空的时候，才代表数据真正的发送完毕
- */
-        if (u-&gt;out_bufs || u-&gt;busy_bufs) {
-
-            /*包体发送，会逐层经过包体过滤模块*/
-            rc = ngx_http_output_filter(r, u-&gt;out_bufs);
-
-            if (rc == NGX_ERROR) {
-                ngx_http_upstream_finalize_request(r, u, 0);
-                return;
-            }
-
-            ngx_chain_update_chains(r-&gt;pool, &amp;u-&gt;free_bufs, &amp;u-&gt;busy_bufs,
-                                    &amp;u-&gt;out_bufs, u-&gt;output.tag);
-        }
-        /*上面说过了*/
-        if (u-&gt;busy_bufs == NULL) {
-                /*也说过了*/
-            if (u-&gt;length == 0
-                /*从网上看来的，eof代表对端结束了会话，发送了fin*/
-                || upstream-&gt;read-&gt;eof
-                || upstream-&gt;read-&gt;error)
-            {
-                /*结束本次upstream请求*/
-                ngx_http_upstream_finalize_request(r, u, 0);
-                return;
-            }
-
-            b-&gt;pos = b-&gt;start;
-            b-&gt;last = b-&gt;start;
-        }
-    }
-           size = b-&gt;end - b-&gt;last;
-
-    if (size &amp;&amp; upstream-&gt;read-&gt;ready) {
-
-        n = upstream-&gt;recv(upstream, b-&gt;last, size);
-
-        if (n == NGX_AGAIN) {
-            break;
-        }
-
-        if (n &gt; 0) {
-            u-&gt;state-&gt;response_length += n;
-/*包体过滤*/
-            if (u-&gt;input_filter(u-&gt;input_filter_ctx, n) == NGX_ERROR) {
-                ngx_http_upstream_finalize_request(r, u, 0);
-                return;
-            }
-        }
-/*立即发送*/
-        do_write = 1;
-
-        continue;
-    }
-
-    break;
-}
-
-.....
-}
+        <p>真心觉得下载个源码都能这样，还能说啥，f*ck the GFW!!!
+确实比较麻烦，简单记录一下。</p>
+<p>环境：
+    win7 + vmware(ubuntu 10.04)</p>
+<h2 id="1d09f0c71ccee196c3f633c453f61e56">0x00:</h2>
+<div class="codehilite"><pre>先安装一些必要的组件。
+可以先更新一下源，改成163的。
 </pre></div>
 
 
-<p>&emsp;&emsp;还有什么可说的？自己比较关心的那个ngx_http_upstream_finalize_request，但是打算放在长连接的时候讲。那剩下的可能就没什么好讲了。那就简单说说过滤模块吧。</p>
-<p>&emsp;&emsp;过滤模块从执行流程上不麻烦，很简单的逻辑。书中也有介绍。
-从auto/options脚本下的选项看，nginx的默认包含了几个必须的过滤模块，有一些是可以通过without-xxxx去掉的。有一些是没有选项，也就是没法去掉的。到底包含了哪几个过滤模块，可以再ngx_modules.c的数组里查看，要从下往上看，ngx_http_write_filter_module是最后一个模块.只简单说下两个模块的功能吧.</p>
-<p>&emsp;&emsp;ngx_http_header_filter_module 它的过滤函数是ngx_http_header_filter.代码就不贴了,代码虽然很长,但是功能很明显,就是申请发送的缓存,然后根据headers_out对其赋值，然后发送。只不过它考虑的情况比较复杂，当然这样更严谨。</p>
-<p>&emsp;&emsp;ngx_http_write_filter_module是最后一个过滤模块，所以其必须是真正的发送的模块。不论，包头还是包体的发送，最终都是通过它发送的。
-好像没什么说的了，当然，过滤模块也是nginx中很复杂的一部分，以后要是涉及到复杂的过滤模块的开发的时候，会再详细研究一下。</p>
+<p>参考：<a href="http://blog.csdn.net/xinyuwuxian/article/details/8971210" title="http://blog.csdn.net/xinyuwuxian/article/details/8971210">http://blog.csdn.net/xinyuwuxian/article/details/8971210</a></p>
+<div class="codehilite"><pre>sudo apt-get install git-core gnupg
+sudo add-apt-repository ppa:ferramroberto/java
+sudo apt-get update
+sudo apt-get install sun-java6-jre sun-java6-plugin
+sudo apt-get install sun-java6-jdk
+sudo apt-get install flex bison gperf libsdl-dev libesd0-dev libwxgtk2.6-dev build-essential zip curl
+</pre></div>
+
+
+<h2 id="d9f8ff904949e969b8e749fc527bcabd">0x01:</h2>
+<div class="codehilite"><pre>mkdir ~/bin
+export PATH=$PATH:~/bin
+curl http://git-repo.googlecode.com/files/repo-1.12 &gt; ~/bin/repo
+chmod a+x ~/bin/repo
+</pre></div>
+
+
+<h2 id="57676e448271a34e8347a5319ba43906">0x02:</h2>
+<div class="codehilite"><pre>修改repo的第五行，https改为http
+</pre></div>
+
+
+<h2 id="712baae109640e37589ab88cedcd02be">0x03:</h2>
+<div class="codehilite"><pre>mkdir ~/android-src
+cd ~/android-src/
+repo init -u http://android.googlesource.com/platform/manifest -b android-2.2.2_r1
+输入自己的name，mail
+
+repo sync
+</pre></div>
+
+
+<h2 id="d12c0bb45f959902b78fd9e2d77b7661">0x04:</h2>
+<div class="codehilite"><pre>中间可能会卡住不动，ctrl+z，然后重新repo sync即可。
+</pre></div>
     </div><div id="content-comments"><!-- Duoshuo Comment BEGIN -->
 <div class="ds-thread"></div>
 <script type="text/javascript">
@@ -170,16 +121,16 @@ busy_bufs “忙”的意思，就是说，调用ngx_http_output_filter之后，
 <div id="niu2-right-container" class="col-md-3">
 <div id="niu2-sidebar-meta" class="niu2-sidebar">
     <div class="niu2-sidebar-label"><i class="fa fa-calendar"></i>发布时间:</div>
-    <div class="niu2-sidebar-value">2014-04-01 10:57:37</div>
+    <div class="niu2-sidebar-value">2014-04-23 08:30:23</div>
 <div class="niu2-sidebar-label"><i class="fa fa-open-folder"></i>分类:</div>
-    <div class="niu2-sidebar-value"><a href="http://flankersky.com/nginx/index.html">nginx</a></div><div class="niu2-sidebar-label"><i class="fa fa-tag"></i>标签:</div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/nginx.html">nginx</a></div></div>
+    <div class="niu2-sidebar-value"><a href="http://flankersky.com/android/index.html">android</a></div><div class="niu2-sidebar-label"><i class="fa fa-tag"></i>标签:</div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/android.html">android</a></div><div class="niu2-sidebar-inter-value niu2-sidebar-tag"><a href="http://flankersky.com/tag/yuan-ma.html">源码</a></div></div>
 
 <div id="niu2-sidebar-toc" class="niu2-sidebar" data-status="closed"><div class="niu2-sidebar-label">
         <i id="niu2-sidebar-toc-ctrl" class="fa fa-plus"></i>目录
     </div>
     <ol id="niu2-sidebar-toc-list">
-        <li><a href="#content-heading">nginx中的upstream相关(3)：向下游转发数据</a></li>
-        <li><a href="#content-comments">评论</a></li></ol></div>
+        <li><a href="#content-heading">安卓源码的下载 编译</a></li>
+        <li><a href='#1d09f0c71ccee196c3f633c453f61e56'>0x00:</a></li><li><a href='#d9f8ff904949e969b8e749fc527bcabd'>0x01:</a></li><li><a href='#57676e448271a34e8347a5319ba43906'>0x02:</a></li><li><a href='#712baae109640e37589ab88cedcd02be'>0x03:</a></li><li><a href='#d12c0bb45f959902b78fd9e2d77b7661'>0x04:</a></li><li><a href="#content-comments">评论</a></li></ol></div>
 </div></div><div id="body-footer" class="col-md-6 col-md-offset-2"><div class="niu2-footer">
     <hr/>
 	<p>

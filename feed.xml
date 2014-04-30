@@ -1,5 +1,50 @@
 <?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>flanker's sky</title><link>http://flankersky.com/</link><description></description><atom:link href="http://flankersky.com/feed.xml" rel="self"></atom:link><lastBuildDate>Tue, 01 Apr 2014 11:06:36 +0800</lastBuildDate><item><title>在NDIS6.x的filter基础上的转发</title><link>http://flankersky.com/windows/win7filter.html</link><description>&lt;p&gt;&amp;emsp;&amp;emsp;最近搞windows驱动，想把以前的一个业务搬到windows平台上，走了不少的弯路。这可能是固有思维的缘故吧，因为这个功能在linux上市已经做完了的，但是改动了linux的内核源码（协议栈的路由部分），所以就想都没有想，以为也要移植一个协议栈到windows，于是乎废了很长时间，尝试移植ReactOS的协议栈到windows xp下，后来移植上去之后发现，ROS毕竟是精简过的，很多IRP操作没有定义，所以要想此协议栈正常工作，要么增加这个IRP对应的代码，要么连上层的AFD.sys winsock.dll都移植过来，不过这两种方案工作量都太大了，对我这个菜鸟来说太难了。所以，只能寻找其他出路，还好，是找到了。感慨一下，下面说正题。代码链接在最下面. &lt;/p&gt;
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>flanker's sky</title><link>http://flankersky.com/</link><description></description><atom:link href="http://flankersky.com/feed.xml" rel="self"></atom:link><lastBuildDate>Wed, 23 Apr 2014 08:30:23 +0800</lastBuildDate><item><title>安卓源码的下载 编译</title><link>http://flankersky.com/android/android-src.html</link><description>&lt;p&gt;真心觉得下载个源码都能这样，还能说啥，f*ck the GFW!!!
+确实比较麻烦，简单记录一下。&lt;/p&gt;
+&lt;p&gt;环境：
+    win7 + vmware(ubuntu 10.04)&lt;/p&gt;
+&lt;h2 id="1d09f0c71ccee196c3f633c453f61e56"&gt;0x00:&lt;/h2&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;先安装一些必要的组件。
+可以先更新一下源，改成163的。
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;p&gt;参考：&lt;a href="http://blog.csdn.net/xinyuwuxian/article/details/8971210" title="http://blog.csdn.net/xinyuwuxian/article/details/8971210"&gt;http://blog.csdn.net/xinyuwuxian/article/details/8971210&lt;/a&gt;&lt;/p&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;sudo apt-get install git-core gnupg
+sudo add-apt-repository ppa:ferramroberto/java
+sudo apt-get update
+sudo apt-get install sun-java6-jre sun-java6-plugin
+sudo apt-get install sun-java6-jdk
+sudo apt-get install flex bison gperf libsdl-dev libesd0-dev libwxgtk2.6-dev build-essential zip curl
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;h2 id="d9f8ff904949e969b8e749fc527bcabd"&gt;0x01:&lt;/h2&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;mkdir ~/bin
+export PATH=$PATH:~/bin
+curl http://git-repo.googlecode.com/files/repo-1.12 &amp;gt; ~/bin/repo
+chmod a+x ~/bin/repo
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;h2 id="57676e448271a34e8347a5319ba43906"&gt;0x02:&lt;/h2&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;修改repo的第五行，https改为http
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;h2 id="712baae109640e37589ab88cedcd02be"&gt;0x03:&lt;/h2&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;mkdir ~/android-src
+cd ~/android-src/
+repo init -u http://android.googlesource.com/platform/manifest -b android-2.2.2_r1
+输入自己的name，mail
+
+repo sync
+&lt;/pre&gt;&lt;/div&gt;
+
+
+&lt;h2 id="d12c0bb45f959902b78fd9e2d77b7661"&gt;0x04:&lt;/h2&gt;
+&lt;div class="codehilite"&gt;&lt;pre&gt;中间可能会卡住不动，ctrl+z，然后重新repo sync即可。
+&lt;/pre&gt;&lt;/div&gt;</description><dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">flanker</dc:creator><pubDate>Wed, 23 Apr 2014 08:30:23 +0800</pubDate><guid>tag:flankersky.com,2014-04-23:android/android-src.html</guid><category>android</category><category>源码</category></item><item><title>在NDIS6.x的filter基础上的转发</title><link>http://flankersky.com/windows/win7filter.html</link><description>&lt;p&gt;&amp;emsp;&amp;emsp;最近搞windows驱动，想把以前的一个业务搬到windows平台上，走了不少的弯路。这可能是固有思维的缘故吧，因为这个功能在linux上市已经做完了的，但是改动了linux的内核源码（协议栈的路由部分），所以就想都没有想，以为也要移植一个协议栈到windows，于是乎废了很长时间，尝试移植ReactOS的协议栈到windows xp下，后来移植上去之后发现，ROS毕竟是精简过的，很多IRP操作没有定义，所以要想此协议栈正常工作，要么增加这个IRP对应的代码，要么连上层的AFD.sys winsock.dll都移植过来，不过这两种方案工作量都太大了，对我这个菜鸟来说太难了。所以，只能寻找其他出路，还好，是找到了。感慨一下，下面说正题。代码链接在最下面. &lt;/p&gt;
 &lt;p&gt;&amp;emsp;&amp;emsp;这里只想说一下在NDIS6.x之后的中间层驱动，可能不能叫它中间层驱动了，因为相比NDIS5.1，MS又进行了进一步的封装，原先的那种复杂的堆叠方式已经不明显了，不过，倒是更灵活了，比如你可以单独的只过滤接收或者发送的数据包。如果我是先学的NDIS6.x的filter，后学的NDIS5.1的passthru的话，我肯定会觉得passthru是坨翔，简单一个字“乱”。
 闲话不扯了，这里就是想贴一下在filter的基础上做转发的代码，按照惯例，先推荐几篇自己看的blog，收益颇多，在此表示感谢。
 &lt;a href="http://bbs.pediy.com/showthread.php?t=183801"&gt;http://bbs.pediy.com/showthread.php?t=183801&lt;/a&gt;&lt;/p&gt;
